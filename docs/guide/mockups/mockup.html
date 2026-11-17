@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Illustration</title>
+<style>
+  :root { --line: #c9d1db; --muted: #5f6b7a; --accent: #1f4e79; --hl: #d32f2f; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px "Segoe UI", system-ui, sans-serif; color: #1d2733; background: #e9edf2; }
+  .stage { padding: 24px; }
+  .caption { background: #fff8e1; color: #5c3b00; border: 1px solid #f0d58a; border-radius: 6px; padding: 6px 10px; font-size: 13px; margin-bottom: 12px; display: inline-block; }
+  .win { background: #fff; border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 6px 20px rgba(0,0,0,.12); overflow: hidden; }
+  .title { background: #f3f5f8; border-bottom: 1px solid var(--line); padding: 8px 12px; font-weight: 600; display: flex; gap: 8px; align-items: center; }
+  .title .dots { margin-left: auto; color: var(--muted); letter-spacing: 6px; }
+  .bar { display: flex; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line); background: #fafbfc; }
+  .btn { border: 1px solid var(--line); background: #fff; border-radius: 4px; padding: 5px 14px; }
+  .btn.send { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 600; }
+  .hl { outline: 3px solid var(--hl); outline-offset: 2px; border-radius: 4px; }
+  .row { display: grid; grid-template-columns: 70px 1fr; border-bottom: 1px solid #eef1f4; padding: 6px 12px; }
+  .row b { color: var(--muted); font-weight: 400; }
+  .body { padding: 14px 16px; line-height: 1.5; min-height: 300px; }
+  .paste { border: 2px dashed var(--hl); background: #fff5f5; color: var(--hl); padding: 18px; border-radius: 6px; text-align: center; font-weight: 600; }
+  .sig { margin-top: 14px; color: #333; }
+  .quote { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 10px; color: var(--muted); font-size: 13px; }
+  .chat { display: flex; flex-direction: column; gap: 12px; padding: 16px; min-height: 420px; background: #fbfcfe; }
+  .msg { max-width: 78%; padding: 10px 12px; border-radius: 10px; white-space: pre-wrap; line-height: 1.45; font-size: 13px; }
+  .me { align-self: flex-end; background: #e6eef7; }
+  .ai { align-self: flex-start; background: #fff; border: 1px solid var(--line); }
+  .input { display: flex; gap: 8px; padding: 10px; border-top: 1px solid var(--line); }
+  .input div { flex: 1; border: 1px solid var(--line); border-radius: 18px; padding: 8px 14px; color: var(--muted); }
+  .mail { display: grid; grid-template-columns: 230px 1fr; min-height: 380px; }
+  .folders { border-right: 1px solid var(--line); padding: 8px 0; background: #fafbfc; }
+  .folders div { padding: 4px 14px; }
+  .folders .sel { background: #dde8f4; font-weight: 600; }
+  .list .item { display: grid; grid-template-columns: 26px 1fr 110px; gap: 8px; padding: 10px 12px; border-bottom: 1px solid #eef1f4; align-items: center; }
+  .flag { color: #2e7d4f; font-weight: 700; }
+  .muted { color: var(--muted); font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="stage" id="stage"></div>
+<script>
+const view = new URLSearchParams(location.search).get("view") || "reply";
+const caption = (what) => `<div class="caption">Illustration — your ${what} will look slightly different. Demo data, not a real email.</div>`;
+const quote = `<div class="quote"><b>From:</b> Rivera, Jordan &lt;jrivera@mapleleaf.example.org&gt;<br><b>Subject:</b> School Subtype Error on the ASR<br><br>Good morning,<br>When I open the ASR it says "School subtype is required" and I cannot continue. …</div>`;
+const reply = `Hello Jordan,<br><br>Thank you for contacting the NJIIS Help Desk. We checked NJIIS and the school subtype for Maple Leaf Academy (School NJIIS ID 0012345) is not set yet. Please reply with the school's subtype (public, private or charter) and we will update it so you can complete the ASR.<br><br>Thank you,`;
+const views = {
+  start: () => `<div class="caption">Illustration — your Windows Start menu will look slightly different.</div>
+    <div class="win" style="max-width:560px"><div class="title">Start</div>
+      <div class="input" style="border-top:none;border-bottom:1px solid var(--line)"><div style="color:#1d2733">ASR Audit</div></div>
+      <div style="padding:12px 16px"><div class="muted" style="margin-bottom:8px">Best match</div>
+        <div class="hl" style="display:flex;gap:12px;align-items:center;padding:10px;border-radius:6px;background:#eef3f9">
+          <div style="width:40px;height:40px;border-radius:8px;background:#17324d;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700">A</div>
+          <div><b>ASR Audit Support Desk</b><br><span class="muted">App</span></div></div>
+        <div style="margin-top:12px" class="muted">Click <b>Open</b> (not "Run as administrator").</div></div></div>`,
+  reply: () => caption("Outlook") + `
+    <div class="win"><div class="title">RE: School Subtype Error on the ASR — Message <span class="dots">— ▢ ✕</span></div>
+      <div class="bar"><span class="btn send">Send</span><span class="btn">Attach</span><span class="btn">Signature</span></div>
+      <div class="row"><b>To</b><span>Rivera, Jordan &lt;jrivera@mapleleaf.example.org&gt;</span></div>
+      <div class="row"><b>Subject</b><span>RE: School Subtype Error on the ASR</span></div>
+      <div class="body"><div class="paste">Click here and press Ctrl+V to paste Copilot's reply</div>
+        <div class="sig">Sam Staff<br>NJIIS Help Desk</div>${quote}</div></div>`,
+  pasted: () => caption("Outlook") + `
+    <div class="win"><div class="title">RE: School Subtype Error on the ASR — Message <span class="dots">— ▢ ✕</span></div>
+      <div class="bar"><span class="btn send hl">Send</span><span class="btn">Attach</span><span class="btn">Signature</span></div>
+      <div class="row"><b>To</b><span>Rivera, Jordan &lt;jrivera@mapleleaf.example.org&gt;</span></div>
+      <div class="row"><b>Subject</b><span>RE: School Subtype Error on the ASR</span></div>
+      <div class="body">${reply}<div class="sig">Sam Staff<br>NJIIS Help Desk</div>${quote}</div></div>`,
+  copilot: () => caption("Copilot") + `
+    <div class="win"><div class="title">Copilot chat <span class="dots">— ▢ ✕</span></div>
+      <div class="chat">
+        <div class="msg me">Please draft a concise, professional NJIIS Help Desk reply to the email below.
+
+Use the approved ASR/Audit SOP and exact approved wording when applicable. …
+
+TICKET
+Ticket ID: T-000001
+Issue type(s): Missing school subtype - request information
+…  (the whole copied prompt)</div>
+        <div class="msg ai"><b>Subject:</b> RE: School Subtype Error on the ASR
+
+${reply.replace(/<br>/g, "\n")}
+<span class="btn hl" style="display:inline-block;margin-top:8px">Copy</span></div>
+      </div>
+      <div class="input"><div>Paste the prompt here (Ctrl+V) and press Enter</div><span class="btn send">Send</span></div></div>`,
+  completed: () => caption("Outlook") + `
+    <div class="win"><div class="title">Help Desk Shared Mailbox (demo) <span class="dots">— ▢ ✕</span></div>
+      <div class="mail"><div class="folders">
+          <div>▾ Inbox</div><div style="padding-left:30px">▸ My Folder</div><div style="padding-left:30px">Teammate A</div>
+          <div class="sel hl" style="margin-left:24px">Completed</div><div>Drafts</div><div>Sent Items</div></div>
+        <div class="list">
+          <div class="item"><span class="flag">✔</span><div><b>Rivera, Jordan</b><br>School Subtype Error on the ASR</div><span class="muted">Flag: Completed</span></div>
+          <div class="item"><span class="flag">✔</span><div><b>Ava Chen</b><br>User guide</div><span class="muted">Flag: Completed</span></div>
+        </div></div></div>`,
+};
+document.getElementById("stage").innerHTML = (views[view] || views.reply)();
+</script>
+</body>
+</html>

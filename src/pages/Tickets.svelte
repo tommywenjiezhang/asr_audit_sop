@@ -1,32 +1,55 @@
 <script lang="ts">
-  import { api, debounce, errMsg, fmtDate, type TicketSummary } from "../lib/api";
+  import { onMount } from "svelte";
+  import { api, debounce, errMsg, fmtDate, HISTORY_REASONS, localDayStart, reasonLabel, statusText, type ListQuery, type ScopeStatus, type Staff, type TicketSummary } from "../lib/api";
   import { app, issueName, toast } from "../lib/stores.svelte";
   import TicketDetail from "../components/TicketDetail.svelte";
-  import EmailAssistant from "../components/EmailAssistant.svelte";
   import NewTicketDialog from "../components/NewTicketDialog.svelte";
+  import AssignDialog from "../components/AssignDialog.svelte";
 
-  let { group }: { group: string } = $props();
-
-  const PAGE = 200;
+  type View = "current" | "unverified" | "history";
+  const PAGE = 100;
+  const blank = { search: "", status: "", assignee: "", issue: "", recFrom: "", recTo: "", compFrom: "", compTo: "", asgFrom: "", asgTo: "", age: 0, reason: "", school: "", sender: "", sort: "received" };
+  let view = $state<View>("current");
+  let f = $state({ ...blank });
   let rows = $state<TicketSummary[]>([]);
   let total = $state(0);
-  let search = $state("");
-  let issueFilter = $state("");
   let selected = $state<number | null>(null);
+  let checked = $state<number[]>([]);
   let loading = $state(false);
   let showNew = $state(false);
-  /** bumped when the detail panel changes ticket data (assistant re-checks placeholders) */
-  let fieldsVersion = $state(0);
+  let assignIds = $state<number[] | null>(null);
+  let more = $state(false);
+  let scope = $state<ScopeStatus | null>(null);
+  let staff = $state<Staff[]>([]);
+  let me = $state<number | null>(null);
+  let leftW = $state(Number(localStorage.getItem("leftW")) || 400);
 
-  let leftW = $state(Number(localStorage.getItem("leftW")) || 330);
-  let rightW = $state(Number(localStorage.getItem("rightW")) || 520);
+  onMount(async () => {
+    try {
+      staff = await api.staffList(true);
+      me = await api.currentStaff();
+    } catch (e) { toast(errMsg(e), "error"); }
+  });
+
+  function query(offset: number): ListQuery {
+    return {
+      view, status: f.status, assignee: f.assignee, search: f.search, issue_type: f.issue, sort: f.sort, limit: PAGE, offset,
+      reason: view === "history" ? f.reason : "", school: f.school, sender: f.sender, min_age_days: Number(f.age) || 0,
+      // local midnight of the start date .. local midnight after the end date: end dates are inclusive
+      received_from: f.recFrom ? localDayStart(f.recFrom) : "", received_to: f.recTo ? localDayStart(f.recTo, 1) : "",
+      completed_from: f.compFrom ? localDayStart(f.compFrom) : "", completed_to: f.compTo ? localDayStart(f.compTo, 1) : "",
+      assigned_from: f.asgFrom ? localDayStart(f.asgFrom) : "", assigned_to: f.asgTo ? localDayStart(f.asgTo, 1) : "",
+    };
+  }
 
   async function load(append = false) {
     loading = true;
     try {
-      const r = await api.tickets({ group, search, issue_type: issueFilter, limit: PAGE, offset: append ? rows.length : 0 });
+      const [r, s] = await Promise.all([api.tickets(query(append ? rows.length : 0)), api.scopeStatus()]);
       rows = append ? [...rows, ...r.rows] : r.rows;
       total = r.total;
+      scope = s;
+      if (!append) checked = checked.filter((id) => rows.some((t) => t.id === id));
     } catch (e) {
       toast(errMsg(e), "error");
     } finally {
@@ -36,40 +59,32 @@
   const reloadDebounced = debounce(() => load(), 250);
 
   $effect(() => {
-    // reload on group/filter change or when sync signals new tickets
-    void group; void issueFilter; void app.ticketsVersion;
+    void view; void f.status; void f.assignee; void f.issue; void f.recFrom; void f.recTo; void f.compFrom; void f.compTo;
+    void f.asgFrom; void f.asgTo; void f.age; void f.reason; void f.sort; void app.ticketsVersion; void app.sync?.running;
     load();
   });
 
-  function startDrag(which: "left" | "right", e: PointerEvent) {
+  const filtered = $derived(JSON.stringify(f) !== JSON.stringify(blank));
+  function clearFilters() { f = { ...blank }; }
+  function shortcut(kind: "mine" | "unassigned") {
+    f = { ...blank, assignee: kind === "mine" ? String(me ?? "") : "none", status: kind === "mine" ? "open" : "" };
+    view = "current";
+  }
+  function toggle(id: number, on: boolean) {
+    checked = on ? [...new Set([...checked, id])] : checked.filter((x) => x !== id);
+  }
+
+  function startDrag(e: PointerEvent) {
     const startX = e.clientX;
-    const start = which === "left" ? leftW : rightW;
-    const move = (ev: PointerEvent) => {
-      const d = ev.clientX - startX;
-      if (which === "left") leftW = Math.min(560, Math.max(240, start + d));
-      else rightW = Math.min(900, Math.max(360, start - d));
-    };
+    const start = leftW;
+    const move = (ev: PointerEvent) => { leftW = Math.min(640, Math.max(300, start + ev.clientX - startX)); };
     const up = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
       localStorage.setItem("leftW", String(leftW));
-      localStorage.setItem("rightW", String(rightW));
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
-  }
-
-  function statusClass(s: string) {
-    if (s === "New") return "";
-    if (s === "Needs Review") return "warn";
-    if (s === "Resolved" || s === "Closed") return "grey";
-    if (s.startsWith("Waiting")) return "grey";
-    return "ok";
-  }
-
-  function onChanged() {
-    fieldsVersion++;
-    load();
   }
 
   async function created(id: number) {
@@ -77,58 +92,134 @@
     await load();
     selected = id;
   }
+
+  const views: [View, string][] = [["current", "Current Tickets"], ["unverified", "Awaiting Verification"], ["history", "Ticket History"]];
+  const countOf = (v: View) => (scope ? (v === "current" ? scope.current : v === "history" ? scope.history : scope.unverified) : 0);
 </script>
 
 <div class="ws">
   <section class="queue" style="width:{leftW}px">
+    <div class="tabs">
+      {#each views as [v, label]}
+        {#if v !== "unverified" || countOf(v) > 0 || view === v}
+          <button class="tab" class:on={view === v} onclick={() => { view = v; checked = []; }}>{label} <span class="muted">({countOf(v)})</span></button>
+        {/if}
+      {/each}
+    </div>
+    <div class="scopebar small">
+      {#if scope}
+        <div><b>{scope.mailbox}</b> · {scope.summary}</div>
+        <div>
+          {#if scope.running}<span class="badge">Checking Outlook…</span>
+          {:else if scope.last_error}<span class="badge err" title={scope.last_error}>Last check incomplete</span>
+          {:else if scope.stale}<span class="badge warn">Needs refresh</span>{/if}
+          Last verified: {scope.last_ok_at ? fmtDate(scope.last_ok_at) : "never"}
+        </div>
+        {#if view === "unverified"}<div class="notice warn">These tickets have not been confirmed in the selected folders yet. Click <b>Check Now</b> to verify them. They are not claimed to be current.</div>{/if}
+        {#if view === "history"}<div class="muted">Earlier tickets whose emails are no longer in the selected folders. Nothing is deleted.</div>{/if}
+      {/if}
+    </div>
     <div class="qhead stack">
       <div class="row">
-        <input class="grow" placeholder="Search school, ID, sender, subject, T-number…" bind:value={search} oninput={reloadDebounced} />
+        <input class="grow" placeholder="Search ticket, school, ID, sender, phone, subject, email text, notes…" bind:value={f.search} oninput={reloadDebounced} />
         <button class="primary" onclick={() => (showNew = true)} title="Create a ticket manually">+ New</button>
       </div>
-      <select bind:value={issueFilter}>
-        <option value="">All issue types</option>
-        {#each app.catalog?.issue_types ?? [] as it}<option value={it.id}>{it.name}</option>{/each}
-      </select>
-      <div class="muted small">{total} ticket(s){loading ? " · loading…" : ""}</div>
+      <div class="row small">
+        <button class="link small" onclick={() => shortcut("mine")} disabled={me == null} title={me == null ? "Choose who you are in Settings › Staff Assignment" : ""}>My Tickets</button>
+        <button class="link small" onclick={() => shortcut("unassigned")}>Unassigned</button>
+        <span class="grow"></span>
+        <button class="link small" onclick={() => (more = !more)}>{more ? "Fewer filters" : "More filters"}</button>
+        <button class="link small" disabled={!filtered} onclick={clearFilters}>Clear Filters</button>
+      </div>
+      <div class="row">
+        <select bind:value={f.status} title="Workflow status">
+          <option value="">All statuses</option><option value="open">Open (not Done)</option>
+          <option>Unassigned</option><option>Assigned</option><option>In Progress</option><option>Done</option>
+        </select>
+        <select bind:value={f.assignee} title="Assignee">
+          <option value="">Anyone</option><option value="none">No assignee</option>
+          {#each staff as s (s.id)}<option value={String(s.id)}>{s.display_name}{s.active ? "" : " (inactive)"}</option>{/each}
+        </select>
+      </div>
+      {#if more}
+        <select bind:value={f.issue} title="Issue type">
+          <option value="">All issue types</option>
+          {#each app.catalog?.issue_types ?? [] as it}<option value={it.id}>{it.name}</option>{/each}
+        </select>
+        {#if view === "history"}
+          <select bind:value={f.reason} title="Reason for leaving Current Tickets">
+            <option value="">Any reason</option>
+            {#each HISTORY_REASONS as [k, label]}<option value={k}>{label}</option>{/each}
+          </select>
+        {/if}
+        <div class="row">
+          <input placeholder="School name / ID" bind:value={f.school} oninput={reloadDebounced} />
+          <input placeholder="Sender name / email" bind:value={f.sender} oninput={reloadDebounced} />
+        </div>
+        <div class="dates small">
+          <span class="muted dl">Received (email date), end date included</span>
+          <input type="date" bind:value={f.recFrom} /><span class="muted">to</span><input type="date" bind:value={f.recTo} />
+          <span class="muted dl">Assigned (assignment date), end date included</span>
+          <input type="date" bind:value={f.asgFrom} /><span class="muted">to</span><input type="date" bind:value={f.asgTo} />
+          <span class="muted dl">Completed (Mark Done date), end date included</span>
+          <input type="date" bind:value={f.compFrom} /><span class="muted">to</span><input type="date" bind:value={f.compTo} />
+        </div>
+        <div class="row small">
+          <span class="muted">Older than</span><input type="number" min="0" style="width:70px" bind:value={f.age} /><span class="muted">days</span>
+          <span class="grow"></span>
+          <span class="muted">Sort</span>
+          <select style="width:auto" bind:value={f.sort}>
+            <option value="received">Received</option><option value="updated">Updated</option><option value="assigned">Assigned</option><option value="completed">Completed</option>
+          </select>
+        </div>
+      {/if}
+      <div class="row small">
+        <span class="muted"><b>{total}</b> {view === "current" ? "current" : view === "history" ? "historical" : "unverified"} ticket{total === 1 ? "" : "s"}{loading ? " · loading…" : ""}</span>
+        <span class="grow"></span>
+        {#if checked.length}
+          <button class="small primary" onclick={() => (assignIds = [...checked])}>Assign selected ({checked.length})</button>
+          <button class="link small" onclick={() => (checked = [])}>Clear</button>
+        {/if}
+      </div>
     </div>
     <div class="list scroll">
       {#each rows as t (t.id)}
-        <button class="item" class:sel={selected === t.id} onclick={() => (selected = t.id)}>
-          <div class="row">
-            <b>{t.display_id}</b>
-            <span class="badge {statusClass(t.status)}">{t.status}</span>
-            {#if t.priority === "High" || t.priority === "Urgent"}<span class="badge err">{t.priority}</span>{/if}
-            {#if t.possible_duplicate_of}<span class="badge warn" title="Possible duplicate">dup?</span>{/if}
-            <span class="grow"></span>
-            <span class="muted small">{fmtDate(t.last_email_received_at ?? t.updated_at)}</span>
-          </div>
-          <div class="school">{t.school_name ?? t.sender_name ?? t.sender_email ?? "(no school)"}
-            {#if t.school_verification === "Unverified School"}<span class="muted small"> · Unverified School</span>{/if}
-          </div>
-          <div class="muted small ellipsis">{issueName(t.issue_type)}</div>
-          <div class="muted small ellipsis">{t.original_subject ?? ""}</div>
-        </button>
+        <div class="item" class:sel={selected === t.id}>
+          <input type="checkbox" class="pick" checked={checked.includes(t.id)} onchange={(e) => toggle(t.id, (e.target as HTMLInputElement).checked)} aria-label="Select {t.display_id}" />
+          <button class="body" onclick={() => (selected = t.id)}>
+            <div class="row">
+              <b>{t.display_id}</b>
+              <span class="badge {t.status === 'Done' ? 'grey' : t.status === 'Unassigned' ? 'warn' : 'ok'}">{statusText(t.status, t.assignee_name)}</span>
+              {#if t.ownership_conflict}<span class="badge err" title="Emails are in more than one staff folder">owner conflict</span>{/if}
+              {#if t.low_confidence}<span class="badge warn" title="Issue type guessed with low confidence">check type</span>{/if}
+              {#if t.possible_duplicate_of}<span class="badge warn" title="Possible duplicate">dup?</span>{/if}
+              {#if t.needs_review}<span class="badge warn" title="Needs review">review</span>{/if}
+              <span class="grow"></span>
+              <span class="muted small">{fmtDate(t.first_received_at)}</span>
+            </div>
+            <div class="school">{t.school_name ?? t.sender_name ?? t.sender_email ?? "(no school)"}{#if t.school_njiis_id}<span class="muted small">&nbsp;· {t.school_njiis_id}</span>{/if}</div>
+            <div class="muted small ellipsis">{issueName(t.issue_type)}{(t.issue_count ?? 0) > 1 ? ` +${(t.issue_count ?? 1) - 1} more` : ""}</div>
+            <div class="muted small ellipsis">{t.original_subject ?? ""}</div>
+            {#if view === "history" && t.scope_reason}<div class="small reason">{reasonLabel(t.scope_reason)}</div>{/if}
+          </button>
+        </div>
       {:else}
-        <div class="muted" style="padding:12px">{loading ? "Loading…" : "No tickets here."}</div>
+        <div class="muted" style="padding:12px">{loading ? "Loading…" : view === "current" ? "No tickets in the selected folders." : "No tickets here."}</div>
       {/each}
       {#if rows.length < total}
         <button style="margin:8px" onclick={() => load(true)}>Load more ({total - rows.length})</button>
       {/if}
     </div>
   </section>
-  <div class="split" role="separator" aria-orientation="vertical" onpointerdown={(e) => startDrag("left", e)}></div>
+  <div class="split" role="separator" aria-orientation="vertical" onpointerdown={startDrag}></div>
   <section class="center scroll">
     {#if selected}
-      <TicketDetail id={selected} onchanged={onChanged} />
+      <TicketDetail id={selected} onchanged={() => load()} onassign={(ids) => (assignIds = ids)} />
     {:else}
-      <div class="empty muted">Select a ticket, or create one with <b>+ New</b>.<br />Default SOP templates are available on every ticket, even without Outlook.</div>
-    {/if}
-  </section>
-  <div class="split" role="separator" aria-orientation="vertical" onpointerdown={(e) => startDrag("right", e)}></div>
-  <section class="assistant scroll" style="width:{rightW}px">
-    {#if selected}
-      <EmailAssistant ticketId={selected} {fieldsVersion} onchanged={() => load()} />
+      <div class="empty muted">
+        Select a ticket.<br />
+        <b>Copy Prompt</b> → paste into Copilot → <b>Open Outlook Reply</b> → paste Copilot's reply and send it from Outlook → <b>Mark Done</b>.
+      </div>
     {/if}
   </section>
 </div>
@@ -136,20 +227,33 @@
 {#if showNew}
   <NewTicketDialog oncreated={created} onclose={() => (showNew = false)} />
 {/if}
+{#if assignIds}
+  <AssignDialog ticketIds={assignIds} onclose={() => { assignIds = null; load(); app.ticketsVersion++; }} ondone={() => { checked = []; }} />
+{/if}
 
 <style>
   .ws { display: flex; height: 100%; }
   .queue { flex: none; display: flex; flex-direction: column; background: var(--panel); border-right: 1px solid var(--border); }
+  .tabs { display: flex; border-bottom: 1px solid var(--border); padding: 0 6px; flex-wrap: wrap; }
+  .tab { border: none; border-bottom: 2px solid transparent; border-radius: 0; background: none; font-weight: 600; color: var(--muted); padding: 0 8px; height: 34px; }
+  .tab.on { color: var(--accent); border-bottom-color: var(--accent); }
+  .scopebar { padding: 6px 10px; background: #f6f8fb; border-bottom: 1px solid var(--border); line-height: 1.5; }
+  .scopebar .notice { margin-top: 4px; }
   .qhead { padding: 10px; border-bottom: 1px solid var(--border); }
+  .dates { display: grid; grid-template-columns: 1fr auto 1fr; gap: 4px 6px; align-items: center; }
+  .dates .dl { grid-column: 1 / -1; }
+  .dates input { padding: 2px 4px; }
   .list { flex: 1; }
-  .item { display: block; width: 100%; height: auto; text-align: left; border: none; border-bottom: 1px solid var(--border); border-radius: 0; padding: 8px 10px; background: #fff; }
+  .item { display: flex; align-items: flex-start; gap: 6px; border-bottom: 1px solid var(--border); background: #fff; padding-left: 8px; }
   .item:hover { background: #f5f8fc; }
   .item.sel { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+  .pick { margin-top: 11px; }
+  .body { display: block; flex: 1; min-width: 0; height: auto; text-align: left; border: none; border-radius: 0; padding: 8px 10px 8px 2px; background: transparent; }
   .school { margin-top: 3px; font-weight: 500; }
+  .reason { color: var(--accent); margin-top: 2px; }
   .ellipsis { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .split { width: 5px; flex: none; cursor: col-resize; background: transparent; }
   .split:hover { background: #c6d4e3; }
-  .center { flex: 1; min-width: 320px; padding: 12px; }
-  .assistant { flex: none; background: var(--panel); border-left: 1px solid var(--border); padding: 12px; }
+  .center { flex: 1; min-width: 420px; padding: 12px; }
   .empty { margin-top: 60px; text-align: center; line-height: 1.8; }
 </style>

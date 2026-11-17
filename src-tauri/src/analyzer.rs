@@ -19,11 +19,37 @@ pub struct Extracted {
 #[derive(Debug, Clone, Serialize)]
 pub struct Analysis {
     pub issue_type: String,
+    /// Primary issue first, then other clearly present issues (max 3).
+    pub issues: Vec<String>,
     pub confidence: f64,
     pub scores: Vec<(String, f64)>,
     pub fields: Vec<Extracted>,
     pub school_ids: Vec<String>,
     pub facility_ids: Vec<String>,
+    /// Number of school groups found (field keys via `school_key`).
+    pub school_count: i64,
+}
+
+/// Attributes stored per school group.
+pub const SCHOOL_ATTRS: &[&str] = &["name", "njiis_id", "other_ids", "address", "municipality", "county", "zip"];
+
+/// Field key of a school attribute. School 1 uses the original keys (`school_name`, `school_njiis_id`, ...)
+/// so existing tickets and template placeholders keep working; further schools use `school2_name`, ...
+pub fn school_key(slot: i64, attr: &str) -> String {
+    if slot <= 1 { format!("school_{attr}") } else { format!("school{slot}_{attr}") }
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+struct SchoolEx {
+    name: Option<String>,
+    njiis_id: Option<String>,
+    other_ids: Vec<String>,
+    address: Option<String>,
+    municipality: Option<String>,
+    county: Option<String>,
+    zip: Option<String>,
+    /// line index where this group was last touched
+    line: usize,
 }
 
 impl Analysis {
@@ -48,7 +74,7 @@ re!(SCHOOL_NAME, r"\b((?:[A-Z][A-Za-z0-9'.&\-]*\s+){0,6}(?:School|Academy|Presch
 re!(SUBTYPE, r"(?i)\b(?:we\s+are\s+an?|it\s+is\s+an?|it's\s+an?|is\s+an?|(?:subtype|sub-type|type)\s*(?:is|:)\s*(?:an?)?)\s*(charter|public|private)\b");
 re!(SUBTYPE2, r"(?i)\b(charter|public|private)\s+school\b");
 re!(QUOTED_ERR, r#"(?i)(?:error|message|says|saying|shows|showing|states|getting|get)\s*(?:message)?\s*[:\-]?\s*["“']([^"”']{3,200})["”']"#);
-re!(ERR_LINE, r"(?i)\b(error|access denied|denied|unable to|cannot|can't|failed|failure|not working|invalid|black screen|not authorized|unauthorized)\b");
+re!(ERR_TEXT, r"(?i)\b(error|access denied|denied|failed|failure|invalid|black screen|not authorized|unauthorized)\b");
 re!(TRAIN_DONE, r"(?i)\b(?:i|we|she|he|they|staff|nurse)?\s*(?:have|has|had)?\s*(?:completed|finished|took|taken|done|watched|attended)\s+(?:the\s+|my\s+|our\s+)?(?:asr\s+|audit\s+|on-demand\s+|online\s+)?(?:training|webinar)");
 re!(TRAIN_NOT, r"(?i)\b(?:have\s*n[o']t|has\s*n[o']t|did\s*n[o']t|not yet|haven't|hasn't|didn't)\s+(?:yet\s+)?(?:completed|finished|taken|took|done|watched)\s+(?:the\s+)?(?:asr\s+|audit\s+)?training");
 re!(DATE, r"(?i)\b(\d{1,2}/\d{1,2}/\d{2,4}|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s+\d{1,2}(?:st|nd|rd|th)?,?\s*(?:\d{4})?)\b");
@@ -58,6 +84,19 @@ re!(LABELED, r"(?im)^\s*(first\s*name|last\s*name|e-?mail(?:\s*address)?|work\s*
 re!(SUBMITTED_CLAIM, r"(?i)\b(?:i|we)\s+(?:have\s+)?(?:submitted|completed and submitted|sent in|entered)\b");
 re!(EMAIL, r"(?i)\b[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}\b");
 re!(GREETING, r"(?i)^\s*(hi|hello|hey|good (morning|afternoon|evening)|dear|greetings)\b");
+re!(LABEL_LINE, r"^\s*[A-Za-z][A-Za-z /#_.-]{1,30}:\s*\S[^.!?]{0,120}$");
+// other (non-NJIIS) school identifiers, kept with their type
+re!(OTHER_ID, r"(?i)\b(ASR|SHAD|CDS|NCES|county[\s-]*district[\s-]*school)[\s_-]*(?:ID|#|code|number|no\.?)\s*(?:is|:|=|-|#)?\s*#?\s*([A-Z0-9][A-Z0-9-]{1,19})\b");
+re!(SCHOOL_ADDR_LABEL, r"(?i)^\s*(?:school\s+address|address\s+of\s+(?:the\s+|our\s+)?school|(?:school\s+)?location|address)\s*[:\-]\s*(.{5,160}?)\s*$");
+re!(STREET_LINE, r"(?i)^\s*\d{1,6}\s+[A-Za-z0-9.' -]{2,60}\b(?:street|st|avenue|ave|road|rd|boulevard|blvd|drive|dr|lane|ln|way|place|pl|court|ct|highway|hwy|route|rt|pike|parkway|pkwy|terrace|ter)\b\.?.*$");
+re!(CITY_LINE, r"(?i)^\s*([A-Za-z .'-]{2,40}),\s*(?:NJ|N\.J\.|New Jersey)\.?\s+(\d{5}(?:-\d{4})?)\s*$");
+re!(CITY_STATE, r"(?i)([A-Za-z .'-]{2,40}),\s*(?:NJ|N\.J\.|New Jersey)\b");
+re!(ZIP, r"\b(\d{5}(?:-\d{4})?)\b");
+re!(COUNTY, r"\b((?:[A-Z][a-z]+\s){0,2}[A-Z][a-z]+)\s+County\b");
+re!(PHONE, r"(?i)(?:^|[^\d])(\(?\d{3}\)?[\s.\-]?\d{3}[\s.\-]?\d{4})(?:\s*(?:,\s*)?(?:x|ext\.?|extension)\s*\.?\s*(\d{1,6}))?");
+re!(PHONE_LABEL, r"(?i)^\s*(?:phone|tel|telephone|work\s*phone|cell|office|p)\s*[:.]");
+re!(FAX, r"(?i)\bfax\b");
+re!(TITLE_WORD, r"(?i)\b(nurse|rn|bsn|lpn|director|principal|administrator|secretary|coordinator|manager|teacher|assistant|registrar|superintendent|specialist|officer|clerk|owner|supervisor|health|aide|counselor|president|vice|head)\b");
 
 const NAME_STOP: &[&str] = &["the", "our", "your", "my", "this", "that", "each", "every", "a", "an", "school", "forms", "annual",
     "new", "public", "private", "charter", "which", "what", "for", "in", "at", "of", "and", "from", "to", "high", "middle", "elementary"];
@@ -195,7 +234,8 @@ fn summary(current: &str) -> String {
     let text: String = before_signoff(current)
         .lines()
         .map(str::trim)
-        .filter(|l| !l.is_empty() && !GREETING.is_match(l))
+        // "School Name: ...", "NJIIS ID: ..." lines are details, not the description of the problem
+        .filter(|l| !l.is_empty() && !GREETING.is_match(l) && !LABEL_LINE.is_match(l))
         .collect::<Vec<_>>()
         .join(" ");
     let mut out = String::new();
@@ -254,17 +294,10 @@ pub fn analyze(cat: &Catalog, subject: &str, body: &str, sender_name: &str, send
     let (current, quoted) = split_current(body);
     let mut f: Vec<Extracted> = Vec::new();
 
-    // identifiers: current message > subject > quoted history
-    let mut school_ids = ids(&SCHOOL_ID, &current);
-    let mut id_src = "current";
-    if school_ids.is_empty() {
-        school_ids = ids(&SCHOOL_ID, subject);
-        id_src = "subject";
-    }
-    if school_ids.is_empty() {
-        school_ids = ids(&SCHOOL_ID, &quoted);
-        id_src = "quoted";
-    }
+    let (body, signature) = split_signoff(&current);
+
+    // schools: groups of name / NJIIS ID / other IDs / address found together in the message body
+    let mut groups = extract_schools(body);
     let facility_ids = {
         let mut v = ids(&FACILITY_ID, &format!("{subject}\n{current}"));
         if v.is_empty() {
@@ -272,30 +305,88 @@ pub fn analyze(cat: &Catalog, subject: &str, body: &str, sender_name: &str, send
         }
         v
     };
-    if let Some(id) = school_ids.first() {
-        push(&mut f, "school_njiis_id", id, if id_src == "quoted" { "low" } else { "high" }, id_src);
-    } else {
-        // unlabeled "ID: 12345" -> low confidence, only if it is not a facility ID
-        let generic: Vec<String> = ids(&GENERIC_ID, &format!("{subject}\n{current}"))
-            .into_iter()
-            .filter(|i| !facility_ids.contains(i))
-            .collect();
-        if let Some(id) = generic.first() {
-            push(&mut f, "school_njiis_id", id, "low", "current");
-            school_ids = generic;
+    let mut school_ids: Vec<String> = groups.iter().filter_map(|g| g.njiis_id.clone()).collect();
+    // fallback for school 1: identifiers anywhere in the current message > subject > quoted history
+    let mut id_conf = "high";
+    let mut id_src = "current";
+    if school_ids.is_empty() {
+        let mut found = ids(&SCHOOL_ID, &current);
+        if found.is_empty() {
+            found = ids(&SCHOOL_ID, subject);
+            id_src = "subject";
+        }
+        if found.is_empty() {
+            found = ids(&SCHOOL_ID, &quoted);
+            id_src = "quoted";
+            id_conf = "low";
+        }
+        if found.is_empty() {
+            // unlabeled "ID: 12345" -> low confidence, only if it is not a facility ID or another ID type
+            let text = format!("{subject}\n{current}");
+            let other_vals: Vec<String> = OTHER_ID.captures_iter(&text).map(|c| c[2].to_string()).collect();
+            found = ids(&GENERIC_ID, &text).into_iter().filter(|i| !facility_ids.contains(i) && !other_vals.contains(i)).collect();
+            id_src = "current";
+            id_conf = "low";
+        }
+        for (k, id) in found.iter().enumerate() {
+            if k == 0 {
+                if groups.is_empty() {
+                    groups.push(SchoolEx::default());
+                }
+                groups[0].njiis_id = Some(id.clone());
+            } else {
+                groups.push(SchoolEx { njiis_id: Some(id.clone()), ..Default::default() });
+            }
+        }
+        school_ids = found;
+    }
+    if groups.first().map(|g| g.name.is_none()).unwrap_or(true) {
+        let taken: Vec<String> = groups.iter().filter_map(|g| g.name.clone()).collect();
+        let (name, conf) = match first_school_name(&current).or_else(|| first_school_name(subject)) {
+            Some(n) => (Some(n), "medium"),
+            None => (first_school_name(&quoted), "low"),
+        };
+        if let Some(n) = name.filter(|n| !taken.contains(n)) {
+            if groups.is_empty() {
+                groups.push(SchoolEx::default());
+            }
+            groups[0].name = Some(n.clone());
+            if conf == "low" {
+                push(&mut f, "school_name", &n, "low", "quoted");
+            }
         }
     }
-    if school_ids.len() > 1 {
-        push(&mut f, "additional_ids", &school_ids[1..].join(", "), "medium", "current");
+    for (i, g) in groups.iter().enumerate() {
+        let slot = i as i64 + 1;
+        if let Some(v) = &g.njiis_id {
+            push(&mut f, &school_key(slot, "njiis_id"), v, if slot == 1 { id_conf } else { "high" }, if slot == 1 { id_src } else { "current" });
+        }
+        if let Some(v) = &g.name {
+            push(&mut f, &school_key(slot, "name"), v, "medium", "current");
+        }
+        if !g.other_ids.is_empty() {
+            push(&mut f, &school_key(slot, "other_ids"), &g.other_ids.join("; "), "high", "current");
+        }
+        for (attr, v, conf) in [("address", &g.address, "medium"), ("municipality", &g.municipality, "medium"), ("county", &g.county, "low"), ("zip", &g.zip, "medium")] {
+            if let Some(v) = v {
+                push(&mut f, &school_key(slot, attr), v, conf, "current");
+            }
+        }
     }
     if let Some(id) = facility_ids.first() {
         push(&mut f, "facility_id", id, "high", "current");
     }
 
-    if let Some(n) = first_school_name(&current).or_else(|| first_school_name(subject)) {
-        push(&mut f, "school_name", &n, "medium", "current");
-    } else if let Some(n) = first_school_name(&quoted) {
-        push(&mut f, "school_name", &n, "low", "quoted");
+    // sender details from the signature block (never used as the school address)
+    let (title, phone, ext) = signature_details(signature);
+    if let Some(t) = title {
+        push(&mut f, "sender_title", &t, "medium", "signature");
+    }
+    if let Some(p) = phone {
+        push(&mut f, "sender_phone", &p, "medium", "signature");
+    }
+    if let Some(x) = ext {
+        push(&mut f, "sender_phone_ext", &x, "medium", "signature");
     }
 
     let cur_subj = format!("{subject}\n{current}");
@@ -305,11 +396,22 @@ pub fn analyze(cat: &Catalog, subject: &str, body: &str, sender_name: &str, send
         push(&mut f, "school_type", v, "medium", "current");
     }
 
-    // exact error message: quoted text first, then the first line describing an error
-    if let Some(c) = QUOTED_ERR.captures(&cur_subj) {
-        push(&mut f, "error_message", &c[1], "high", "current");
-    } else if let Some(line) = before_signoff(&current).lines().map(str::trim).find(|l| ERR_LINE.is_match(l) && l.len() <= 400) {
-        push(&mut f, "error_message", line, "medium", "current");
+    // exact error messages: quoted error texts (all of them); otherwise lines describing an error
+    let mut errors: Vec<String> = Vec::new();
+    for c in QUOTED_ERR.captures_iter(&cur_subj) {
+        let e = c[1].trim().to_string();
+        if !errors.contains(&e) && errors.len() < 5 {
+            errors.push(e);
+        }
+    }
+    if !errors.is_empty() {
+        push(&mut f, "error_message", &errors.join("\n"), "high", "current");
+    } else {
+        // without quotes, only lines that name an actual error ("unable to ..." describes the request, not an error text)
+        let lines: Vec<&str> = body.lines().map(str::trim).filter(|l| ERR_TEXT.is_match(l) && l.len() <= 300).take(3).collect();
+        if !lines.is_empty() {
+            push(&mut f, "error_message", &lines.join("\n"), "medium", "current");
+        }
     }
 
     let lower = cur_subj.to_lowercase();
@@ -386,8 +488,222 @@ pub fn analyze(cat: &Catalog, subject: &str, body: &str, sender_name: &str, send
 
     let class_text = before_signoff(&current);
     let (issue_type, confidence, scores) = classify(cat, subject, class_text);
+    let issues = related_issues(&issue_type, &scores);
+    let school_count = groups.len() as i64;
 
-    Analysis { issue_type, confidence, scores, fields: f, school_ids, facility_ids }
+    Analysis { issue_type, issues, confidence, scores, fields: f, school_ids, facility_ids, school_count }
+}
+
+/// Primary issue plus other issues that are clearly present (score >= 3 and >= 50% of the top score).
+pub fn related_issues(primary: &str, scores: &[(String, f64)]) -> Vec<String> {
+    let mut out = vec![primary.to_string()];
+    if primary == "other" {
+        return out;
+    }
+    let top = scores.first().map(|s| s.1).unwrap_or(0.0);
+    for (id, s) in scores {
+        if out.len() >= 3 {
+            break;
+        }
+        if id != primary && *s >= 3.0 && *s >= top * 0.5 {
+            out.push(id.clone());
+        }
+    }
+    out
+}
+
+/// (message body before the sign-off, signature block from the sign-off on).
+fn split_signoff(current: &str) -> (&str, &str) {
+    match SIGNOFF.find(current) {
+        Some(m) if m.start() > 20 => (&current[..m.start()], &current[m.start()..]),
+        _ => (current, ""),
+    }
+}
+
+fn norm_id_type(raw: &str) -> String {
+    let t = raw.trim().to_uppercase();
+    if t.starts_with("COUNTY") { "CDS_ID".into() } else { format!("{t}_ID") }
+}
+
+fn apply_address(g: &mut SchoolEx, addr: &str) {
+    let addr = addr.trim().trim_end_matches(['.', ',']).to_string();
+    if let Some(c) = CITY_STATE.captures(&addr) {
+        let city = c[1].rsplit(',').next().unwrap_or("").trim();
+        // "123 Main St Trenton, NJ" -> keep only the trailing words that are not part of the street line
+        let city = city.rsplit(|ch: char| ch.is_ascii_digit()).next().unwrap_or(city).trim();
+        let city = STREET_SUFFIX_SPLIT.split(city).last().unwrap_or(city).trim();
+        if !city.is_empty() {
+            g.municipality = Some(city.to_string());
+        }
+    }
+    if let Some(z) = ZIP.captures_iter(&addr).last() {
+        g.zip = Some(z[1].to_string());
+    }
+    g.address = Some(addr);
+}
+
+re!(STREET_SUFFIX_SPLIT, r"(?i)\b(?:street|st|avenue|ave|road|rd|boulevard|blvd|drive|dr|lane|ln|way|place|pl|court|ct|highway|hwy|route|pike|parkway|pkwy|terrace|ter)\.?\s+");
+
+/// Group school details that appear together in the message body (before the sign-off).
+/// Conservative: identifiers are paired with a school name on the same or the previous line;
+/// addresses are taken only when labelled, or on the line right after a school name/ID.
+fn extract_schools(body: &str) -> Vec<SchoolEx> {
+    let lines: Vec<&str> = body.lines().collect();
+    let mut g: Vec<SchoolEx> = Vec::new();
+    // an unlabelled school name seen on a line without an identifier
+    let mut pending: Option<(String, usize)> = None;
+    let near = |s: &SchoolEx, i: usize, n: usize| i.saturating_sub(s.line) <= n;
+    for (i, line) in lines.iter().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let labeled_name = SCHOOL_NAME_LABEL.captures(line).map(|c| c[1].trim().to_string()).filter(|v| !v.to_lowercase().starts_with("forms"));
+        let name_here = labeled_name.clone().or_else(|| SCHOOL_NAME.captures_iter(line).find_map(|c| clean_school_name(&c[1])));
+        let ids_here = ids(&SCHOOL_ID, line);
+        let others: Vec<String> = OTHER_ID.captures_iter(line).map(|c| format!("{}: {}", norm_id_type(&c[1]), &c[2])).collect();
+
+        if !ids_here.is_empty() {
+            for (k, id) in ids_here.iter().enumerate() {
+                let reuse = k == 0 && g.last().map(|s| s.njiis_id.is_none() && near(s, i, 2)).unwrap_or(false);
+                if reuse {
+                    let s = g.last_mut().unwrap();
+                    s.njiis_id = Some(id.clone());
+                    s.line = i;
+                    if s.name.is_none() {
+                        s.name = name_here.clone();
+                    }
+                } else {
+                    let name = if k == 0 {
+                        name_here.clone().or_else(|| pending.take().filter(|(_, l)| i.saturating_sub(*l) <= 2).map(|(n, _)| n))
+                    } else {
+                        None
+                    };
+                    g.push(SchoolEx { njiis_id: Some(id.clone()), name, line: i, ..Default::default() });
+                }
+            }
+            pending = None;
+        } else if let Some(n) = labeled_name {
+            match g.last_mut().filter(|s| s.name.is_none() && i.saturating_sub(s.line) <= 2) {
+                Some(s) => {
+                    s.name = Some(n);
+                    s.line = i;
+                }
+                None => g.push(SchoolEx { name: Some(n), line: i, ..Default::default() }),
+            }
+            pending = None;
+        } else if let Some(n) = &name_here {
+            if !others.is_empty() {
+                g.push(SchoolEx { name: Some(n.clone()), line: i, ..Default::default() });
+            } else {
+                pending = Some((n.clone(), i));
+            }
+        }
+
+        if !others.is_empty() {
+            if g.is_empty() || !near(g.last().unwrap(), i, 3) {
+                let name = pending.take().filter(|(_, l)| i.saturating_sub(*l) <= 2).map(|(n, _)| n);
+                g.push(SchoolEx { name, line: i, ..Default::default() });
+            }
+            let s = g.last_mut().unwrap();
+            for o in others {
+                if !s.other_ids.contains(&o) {
+                    s.other_ids.push(o);
+                }
+            }
+            s.line = i;
+        }
+
+        // addresses
+        if let Some(c) = SCHOOL_ADDR_LABEL.captures(line) {
+            let explicit = line.to_lowercase().contains("school");
+            let target = if g.last().map(|s| near(s, i, 3)).unwrap_or(false) {
+                g.len().checked_sub(1)
+            } else if let Some((n, _)) = pending.take().filter(|(_, l)| i.saturating_sub(*l) <= 2) {
+                g.push(SchoolEx { name: Some(n), line: i, ..Default::default() });
+                Some(g.len() - 1)
+            } else if explicit {
+                g.push(SchoolEx { line: i, ..Default::default() });
+                Some(g.len() - 1)
+            } else {
+                None
+            };
+            if let Some(t) = target {
+                if g[t].address.is_none() {
+                    let mut addr = c[1].to_string();
+                    if let Some(next) = lines.get(i + 1).filter(|l| CITY_LINE.is_match(l)) {
+                        addr = format!("{}, {}", addr.trim_end_matches(','), next.trim());
+                    }
+                    apply_address(&mut g[t], &addr);
+                    g[t].line = i;
+                }
+            }
+        } else if STREET_LINE.is_match(line) {
+            // unlabelled street line directly below a school name / ID line
+            let target = if g.last().map(|s| s.address.is_none() && near(s, i, 1)).unwrap_or(false) {
+                g.len().checked_sub(1)
+            } else if let Some((n, _)) = pending.take().filter(|(_, l)| i.saturating_sub(*l) <= 1) {
+                g.push(SchoolEx { name: Some(n), line: i, ..Default::default() });
+                Some(g.len() - 1)
+            } else {
+                None
+            };
+            if let Some(t) = target {
+                let mut addr = line.trim().to_string();
+                if let Some(next) = lines.get(i + 1).filter(|l| CITY_LINE.is_match(l)) {
+                    addr = format!("{}, {}", addr.trim_end_matches(','), next.trim());
+                }
+                apply_address(&mut g[t], &addr);
+                g[t].line = i;
+            }
+        }
+
+        // county (not the county of a health department)
+        if let Some(c) = COUNTY.captures(line) {
+            let rest = &line[c.get(0).unwrap().end()..].trim_start().to_lowercase();
+            let lhd = rest.starts_with("health") || rest.starts_with("department") || rest.starts_with("board") || rest.starts_with("dept");
+            if !lhd {
+                if let Some(s) = g.last_mut().filter(|s| s.county.is_none() && i.saturating_sub(s.line) <= 3) {
+                    s.county = Some(c[1].to_string());
+                }
+            }
+        }
+    }
+    g
+}
+
+/// Sender title, phone and extension from the signature block only. Labelled phone lines in the body
+/// (e.g. "Work Phone:" in a new-account request) usually describe another person and are not used.
+fn signature_details(signature: &str) -> (Option<String>, Option<String>, Option<String>) {
+    let sig_lines: Vec<&str> = signature.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    let mut title = None;
+    // line 0 is the sign-off, line 1 usually the name; the title follows
+    for l in sig_lines.iter().skip(2).take(3) {
+        if l.contains('@') || PHONE.is_match(l) || STREET_LINE.is_match(l) || CITY_LINE.is_match(l) {
+            continue;
+        }
+        if TITLE_WORD.is_match(l) {
+            // "School Nurse, Lincoln Elementary School" -> "School Nurse"
+            let t = match l.split_once(',') {
+                Some((a, b)) if TITLE_WORD.is_match(a) && SCHOOL_NAME.is_match(b) => a.trim(),
+                _ => l,
+            };
+            title = Some(t.to_string());
+            break;
+        }
+    }
+    let mut phone = None;
+    let mut ext = None;
+    for l in sig_lines.iter().copied() {
+        if FAX.is_match(l) && !PHONE_LABEL.is_match(l) {
+            continue;
+        }
+        if let Some(c) = PHONE.captures(l) {
+            phone = Some(c[1].trim().to_string());
+            ext = c.get(2).map(|m| m.as_str().to_string());
+            break;
+        }
+    }
+    (title, phone, ext)
 }
 
 #[cfg(test)]
@@ -411,7 +727,60 @@ mod tests {
         let a = analyze(catalog(), "help", body, "", "");
         assert_eq!(a.get("facility_id"), Some("404"));
         assert_eq!(a.get("school_njiis_id"), Some("11111"));
-        assert_eq!(a.get("additional_ids"), Some("22222"));
+        assert_eq!(a.get("school2_njiis_id"), Some("22222"), "each NJIIS ID gets its own school group");
+        assert_eq!(a.school_count, 2);
+    }
+
+    #[test]
+    fn multiple_schools_keep_ids_and_addresses_together() {
+        let body = "Hello,\nWe need help for two schools.\n\
+            School Name: Maple Leaf Academy\nSchool NJIIS ID: 0012345\nAddress: 12 Oak Street, Trenton, NJ 08608\n\n\
+            School Name: Riverside Preschool\nSchool NJIIS ID: 0067890\nASR ID: A-7781\nSHAD ID: 5521\n\
+            Riverside Preschool is in Mercer County.\n\
+            Thank you,\nJane Doe\nSchool Nurse\n99 District Road, Hamilton, NJ 08610\nPhone: (609) 555-0100 ext. 214\nFax: 609-555-0199\n";
+        let a = analyze(catalog(), "ASR access", body, "Doe, Jane", "jdoe@x.org");
+        assert_eq!(a.school_count, 2);
+        assert_eq!(a.get("school_name"), Some("Maple Leaf Academy"));
+        assert_eq!(a.get("school_njiis_id"), Some("0012345"), "leading zeros preserved");
+        assert_eq!(a.get("school_address"), Some("12 Oak Street, Trenton, NJ 08608"));
+        assert_eq!(a.get("school_municipality"), Some("Trenton"));
+        assert_eq!(a.get("school_zip"), Some("08608"));
+        assert_eq!(a.get("school2_name"), Some("Riverside Preschool"));
+        assert_eq!(a.get("school2_njiis_id"), Some("0067890"));
+        assert_eq!(a.get("school2_other_ids"), Some("ASR_ID: A-7781; SHAD_ID: 5521"));
+        assert_eq!(a.get("school2_county"), Some("Mercer"));
+        assert!(a.get("school2_address").is_none(), "the signature address is not a school address");
+        assert!(!a.fields.iter().any(|f| f.value.contains("District Road")), "signature address never extracted");
+        assert_eq!(a.get("sender_title"), Some("School Nurse"));
+        assert_eq!(a.get("sender_phone"), Some("(609) 555-0100"));
+        assert_eq!(a.get("sender_phone_ext"), Some("214"));
+    }
+
+    #[test]
+    fn summary_skips_label_lines() {
+        let body = "Good morning,\nWhen I open the ASR it says \"School subtype is required\".\nSchool Name: Maple Leaf Academy\nSchool NJIIS ID: 0012345\nWe are a private school.\nThanks,\nJo";
+        let a = analyze(catalog(), "Subtype", body, "", "");
+        assert_eq!(a.get("issue_description"), Some("When I open the ASR it says \"School subtype is required\". We are a private school."));
+    }
+
+    #[test]
+    fn other_ids_never_become_njiis_ids() {
+        let a = analyze(catalog(), "help", "Our ASR ID: 004455 for Lincoln Elementary School. We cannot log in.", "", "");
+        assert!(a.get("school_njiis_id").is_none());
+        assert_eq!(a.get("school_other_ids"), Some("ASR_ID: 004455"));
+        assert_eq!(a.get("school_name"), Some("Lincoln Elementary School"));
+    }
+
+    #[test]
+    fn multiple_issues_and_errors() {
+        let body = "Our school is missing the subtype and the webinar shows a black screen.\n\
+            The form says \"Subtype required\" and the video says \"Playback error 224003\".";
+        let a = analyze(catalog(), "Subtype and webinar black screen", body, "", "");
+        assert!(a.issues.len() >= 2, "{:?} {:?}", a.issues, a.scores);
+        assert!(a.issues.contains(&"school_subtype_missing".to_string()));
+        assert!(a.issues.contains(&"webinar_issue".to_string()));
+        assert_eq!(a.issues[0], a.issue_type);
+        assert_eq!(a.get("error_message"), Some("Subtype required\nPlayback error 224003"));
     }
 
     #[test]

@@ -1,0 +1,17 @@
+project:
+  type: default
+  output-dir: _output
+
+format:
+  html:
+    embed-resources: true
+    toc: true
+    toc-depth: 2
+    toc-location: left
+    toc-title: "Contents"
+    number-sections: true
+    theme: cosmo
+    lightbox: true
+    fig-cap-location: bottom
+    css: guide.css
+    lang: en-US

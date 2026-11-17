@@ -10,9 +10,18 @@ use crate::settings::Settings;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
-pub const STATUSES: &[&str] = &["New", "Needs Review", "In Progress", "Waiting for User", "Waiting for Internal Action", "Resolved", "Closed"];
+pub const UNASSIGNED: &str = "Unassigned";
+pub const ASSIGNED: &str = "Assigned";
+pub const IN_PROGRESS: &str = "In Progress";
+pub const DONE: &str = "Done";
+/// Workflow statuses (stored separately from the assignee and from current/history placement).
+/// Assigned is set by assignment (or an owner inferred from a staff folder), In Progress by Start Work,
+/// Done only by `completion` (Mark Done). Review hints are badges, not statuses.
+pub const STATUSES: &[&str] = &[UNASSIGNED, ASSIGNED, IN_PROGRESS, DONE];
 pub const PRIORITIES: &[&str] = &["Low", "Normal", "High", "Urgent"];
 pub const SYSTEM: &str = "system";
+/// SQL expression (alias `t`) for the "low confidence classification" badge.
+const LOW_CONF_SQL: &str = "(t.issue_type_source='auto' AND (t.issue_type='other' OR COALESCE(t.classification_confidence,0) < 0.35))";
 
 pub fn display_id(id: i64) -> String {
     format!("T-{id:06}")
@@ -36,7 +45,20 @@ pub struct TicketSummary {
     pub last_email_received_at: Option<String>,
     pub next_followup_date: Option<String>,
     pub possible_duplicate_of: Option<i64>,
-    pub has_draft: bool,
+    pub first_received_at: Option<String>,
+    pub completed_at: Option<String>,
+    pub needs_review: bool,
+    pub low_confidence: bool,
+    pub issue_count: i64,
+    pub assignee_staff_id: Option<i64>,
+    pub assignee_name: Option<String>,
+    pub assigned_at: Option<String>,
+    pub ownership_conflict: bool,
+    pub scope_state: String,
+    pub scope_reason: Option<String>,
+    pub ticket_ref: Option<String>,
+    /// incoming emails of this ticket currently confirmed in the selected scope
+    pub in_scope_count: i64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -65,6 +87,40 @@ pub struct Ticket {
     pub updated_at: String,
     pub last_email_received_at: Option<String>,
     pub last_response_at: Option<String>,
+    pub needs_review: bool,
+    pub completed_at: Option<String>,
+    pub first_received_at: Option<String>,
+    pub staff_actions: Option<String>,
+    pub last_prompt_at: Option<String>,
+    pub low_confidence: bool,
+    pub assignee_staff_id: Option<i64>,
+    pub assigned_at: Option<String>,
+    pub ownership_conflict: bool,
+    /// Stable reference shared by all computers that import the same email (local T-numbers are not).
+    pub ticket_ref: Option<String>,
+    /// "current" | "history" | "unverified"
+    pub scope_state: String,
+    pub scope_reason: Option<String>,
+    pub scope_changed_at: Option<String>,
+    pub assignee_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct IssueRow {
+    pub issue_type: String,
+    pub source: String,
+    pub position: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CompletionRow {
+    pub message_id: i64,
+    pub flagged_at: Option<String>,
+    pub moved_at: Option<String>,
+    pub dest_path: Option<String>,
+    pub last_error: Option<String>,
+    pub last_error_at: Option<String>,
+    pub attempts: i64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -95,6 +151,13 @@ pub struct MessageRow {
     pub has_attachments: bool,
     pub entry_id: Option<String>,
     pub store_id: Option<String>,
+    /// "in" | "out" | "unknown" - membership of the selected scope
+    pub scope_state: String,
+    pub out_reason: Option<String>,
+    /// "found" | "not_found" | "error" | null (not checked yet)
+    pub location_status: Option<String>,
+    pub location_checked_at: Option<String>,
+    pub owner_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -114,13 +177,35 @@ pub struct TicketDetail {
     pub fields: Vec<TicketField>,
     pub messages: Vec<MessageRow>,
     pub history: Vec<HistoryRow>,
+    pub issues: Vec<IssueRow>,
+    /// Active school group slots (1, 2, ...); values are fields keyed by `analyzer::school_key`.
+    pub schools: Vec<i64>,
+    pub completion: Vec<CompletionRow>,
+    pub assignments: Vec<crate::assignment::AssignmentOp>,
 }
 
-const TICKET_COLS: &str = "id,status,priority,issue_type,issue_type_source,classification_confidence,school_njiis_id,school_name,school_verification,sender_name,sender_email,original_subject,assigned_staff,conversation_id,possible_duplicate_of,internal_notes,resolution_notes,next_followup_date,source,created_at,updated_at,last_email_received_at,last_response_at";
+const TICKET_COLS: &str = "id,status,priority,issue_type,issue_type_source,classification_confidence,school_njiis_id,school_name,school_verification,sender_name,sender_email,original_subject,assigned_staff,conversation_id,possible_duplicate_of,internal_notes,resolution_notes,next_followup_date,source,created_at,updated_at,last_email_received_at,last_response_at,needs_review,completed_at,first_received_at,staff_actions,last_prompt_at,assignee_staff_id,assigned_at,ownership_conflict,ticket_ref,scope_state,scope_reason,scope_changed_at,(SELECT display_name FROM staff s WHERE s.id=tickets.assignee_staff_id)";
 
 fn map_ticket(r: &rusqlite::Row) -> rusqlite::Result<Ticket> {
     let id: i64 = r.get(0)?;
+    let issue_type: String = r.get(3)?;
+    let source: String = r.get(4)?;
+    let conf: Option<f64> = r.get(5)?;
     Ok(Ticket {
+        low_confidence: source == "auto" && (issue_type == "other" || conf.unwrap_or(0.0) < 0.35),
+        needs_review: r.get::<_, i64>(23)? != 0,
+        completed_at: r.get(24)?,
+        first_received_at: r.get(25)?,
+        staff_actions: r.get(26)?,
+        last_prompt_at: r.get(27)?,
+        assignee_staff_id: r.get(28)?,
+        assigned_at: r.get(29)?,
+        ownership_conflict: r.get::<_, i64>(30)? != 0,
+        ticket_ref: r.get(31)?,
+        scope_state: r.get(32)?,
+        scope_reason: r.get(33)?,
+        scope_changed_at: r.get(34)?,
+        assignee_name: r.get(35)?,
         id,
         display_id: display_id(id),
         status: r.get(1)?,
@@ -172,10 +257,33 @@ fn touch(conn: &Connection, id: i64) -> AppResult<()> {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct ListQuery {
-    /// "all" | "new" | "review" | "progress" | "waiting" | "done" | "open"
-    pub group: String,
+    /// "current" (Current Tickets) | "history" (Ticket History) | "unverified" (Awaiting Verification) | "" (all)
+    pub view: String,
+    /// "" (all) | "Unassigned" | "Assigned" | "In Progress" | "Done" | "open" (anything but Done)
+    pub status: String,
+    /// "" (anyone) | "none" (no assignee) | staff id
+    pub assignee: String,
+    /// History filter: reason the ticket left Current Tickets ("completed", "reassigned", "moved", "not_found", "unknown")
+    pub reason: String,
+    /// Plain-text filters on school (name / NJIIS ID / other IDs) and sender (name / email)
+    pub school: String,
+    pub sender: String,
+    /// Only tickets received at least this many days ago (ticket age); 0 = off
+    pub min_age_days: i64,
+    pub assigned_from: String,
+    pub assigned_to: String,
+    /// Free text (FTS5 over ticket, school, sender, subject, bodies, notes) or a ticket ID.
     pub search: String,
+    /// Matches any of the ticket's issue types.
     pub issue_type: String,
+    /// UTC RFC3339 bounds, `from` inclusive and `to` exclusive. The UI sends local midnight of the
+    /// start date and local midnight of the day AFTER the end date, so end dates are inclusive.
+    pub received_from: String,
+    pub received_to: String,
+    pub completed_from: String,
+    pub completed_to: String,
+    /// "received" (default) | "updated" | "completed"
+    pub sort: String,
     pub limit: i64,
     pub offset: i64,
 }
@@ -187,58 +295,121 @@ pub struct ListResult {
     pub counts: Vec<(String, i64)>,
 }
 
-fn group_statuses(group: &str) -> Option<Vec<&'static str>> {
-    Some(match group {
-        "new" => vec!["New"],
-        "review" => vec!["Needs Review"],
-        "progress" => vec!["In Progress"],
-        "waiting" => vec!["Waiting for User", "Waiting for Internal Action"],
-        "done" => vec!["Resolved", "Closed"],
-        "open" => vec!["New", "Needs Review", "In Progress", "Waiting for User", "Waiting for Internal Action"],
-        _ => return None,
-    })
+fn parse_ticket_id(s: &str) -> Option<i64> {
+    let t = s.trim();
+    let digits = t.strip_prefix(['T', 't']).map(|r| r.trim_start_matches('-')).unwrap_or(t);
+    if digits.is_empty() || !digits.chars().all(|c| c.is_ascii_digit()) || digits.len() > 12 {
+        return None;
+    }
+    digits.parse().ok()
 }
 
 pub fn list(conn: &Connection, q: &ListQuery) -> AppResult<ListResult> {
     let mut where_: Vec<String> = vec!["1=1".into()];
     let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
-    if let Some(sts) = group_statuses(&q.group) {
-        let ph: Vec<String> = sts.iter().map(|s| {
-            args.push(Box::new(s.to_string()));
-            format!("?{}", args.len())
-        }).collect();
-        where_.push(format!("t.status IN ({})", ph.join(",")));
+    let arg = |v: String, args: &mut Vec<Box<dyn rusqlite::ToSql>>| {
+        args.push(Box::new(v));
+        format!("?{}", args.len())
+    };
+    match q.view.as_str() {
+        "" | "all" => {}
+        v @ ("current" | "history" | "unverified") => where_.push(format!("t.scope_state = '{v}'")),
+        _ => return Err(AppError::coded("INVALID", "Unknown view")),
+    }
+    if q.status == "open" {
+        where_.push(format!("t.status <> '{DONE}'"));
+    } else if !q.status.is_empty() {
+        if !STATUSES.contains(&q.status.as_str()) {
+            return Err(AppError::coded("INVALID", "Unknown status filter"));
+        }
+        let p = arg(q.status.clone(), &mut args);
+        where_.push(format!("t.status = {p}"));
+    }
+    match q.assignee.as_str() {
+        "" => {}
+        "none" => where_.push("t.assignee_staff_id IS NULL".into()),
+        id => {
+            let id: i64 = id.parse().map_err(|_| AppError::coded("INVALID", "Unknown assignee filter"))?;
+            where_.push(format!("t.assignee_staff_id = {id}"));
+        }
+    }
+    if !q.reason.is_empty() {
+        let p = arg(q.reason.clone(), &mut args);
+        where_.push(format!("t.scope_reason = {p}"));
+    }
+    let like = |s: &str| format!("%{}%", s.trim().replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_"));
+    if !q.school.trim().is_empty() {
+        let p = arg(like(&q.school), &mut args);
+        where_.push(format!(
+            "(t.school_name LIKE {p} ESCAPE '\\' OR t.school_njiis_id LIKE {p} ESCAPE '\\' OR EXISTS(SELECT 1 FROM ticket_fields f WHERE f.ticket_id=t.id
+               AND (f.field_key LIKE 'school%' OR f.field_key='facility_id') AND COALESCE(f.manual_value,f.extracted_value) LIKE {p} ESCAPE '\\'))"
+        ));
+    }
+    if !q.sender.trim().is_empty() {
+        let p = arg(like(&q.sender), &mut args);
+        where_.push(format!("(t.sender_name LIKE {p} ESCAPE '\\' OR t.sender_email LIKE {p} ESCAPE '\\')"));
+    }
+    if q.min_age_days > 0 {
+        let cutoff = (chrono::Utc::now() - chrono::Duration::days(q.min_age_days)).to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let p = arg(cutoff, &mut args);
+        where_.push(format!("COALESCE(t.first_received_at, t.created_at) <= {p}"));
+    }
+    if !q.assigned_from.is_empty() {
+        let p = arg(normalize_instant(&q.assigned_from)?, &mut args);
+        where_.push(format!("t.assigned_at >= {p}"));
+    }
+    if !q.assigned_to.is_empty() {
+        let p = arg(normalize_instant(&q.assigned_to)?, &mut args);
+        where_.push(format!("t.assigned_at < {p}"));
     }
     if !q.issue_type.is_empty() {
-        args.push(Box::new(q.issue_type.clone()));
-        where_.push(format!("t.issue_type = ?{}", args.len()));
+        let p = arg(q.issue_type.clone(), &mut args);
+        where_.push(format!("(t.issue_type = {p} OR EXISTS(SELECT 1 FROM ticket_issues i WHERE i.ticket_id=t.id AND i.issue_type={p}))"));
+    }
+    for (col, from, to) in [("COALESCE(t.first_received_at, t.created_at)", &q.received_from, &q.received_to), ("t.completed_at", &q.completed_from, &q.completed_to)] {
+        if !from.is_empty() {
+            let p = arg(normalize_instant(from)?, &mut args);
+            where_.push(format!("{col} >= {p}"));
+        }
+        if !to.is_empty() {
+            let p = arg(normalize_instant(to)?, &mut args);
+            where_.push(format!("{col} < {p}"));
+        }
     }
     let search = q.search.trim();
     if !search.is_empty() {
-        let like = format!("%{}%", search.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_"));
-        args.push(Box::new(like));
-        let n = args.len();
-        let id_clause = search
-            .trim_start_matches(['T', 't', '-'])
-            .trim_start_matches('0')
-            .parse::<i64>()
-            .ok()
-            .map(|id| format!(" OR t.id = {id}"))
-            .unwrap_or_default();
-        where_.push(format!(
-            "(t.school_name LIKE ?{n} ESCAPE '\\' OR t.school_njiis_id LIKE ?{n} ESCAPE '\\' OR t.sender_name LIKE ?{n} ESCAPE '\\'
-              OR t.sender_email LIKE ?{n} ESCAPE '\\' OR t.original_subject LIKE ?{n} ESCAPE '\\'{id_clause})"
-        ));
+        let id_clause = parse_ticket_id(search).map(|id| format!("t.id = {id}"));
+        let fts_clause = crate::search::match_expr(search).map(|m| {
+            let p = arg(m, &mut args);
+            format!("t.id IN (SELECT rowid FROM ticket_search WHERE ticket_search MATCH {p})")
+        });
+        let parts: Vec<String> = [id_clause, fts_clause].into_iter().flatten().collect();
+        if parts.is_empty() {
+            where_.push("0".into());
+        } else {
+            where_.push(format!("({})", parts.join(" OR ")));
+        }
     }
     let w = where_.join(" AND ");
     let params_ref: Vec<&dyn rusqlite::ToSql> = args.iter().map(|b| b.as_ref()).collect();
     let total: i64 = conn.query_row(&format!("SELECT COUNT(*) FROM tickets t WHERE {w}"), params_ref.as_slice(), |r| r.get(0))?;
     let limit = if q.limit <= 0 { 200 } else { q.limit.min(1000) };
+    let order = match q.sort.as_str() {
+        "updated" => "t.updated_at DESC, t.id DESC",
+        "completed" => "t.completed_at DESC NULLS LAST, t.id DESC",
+        "assigned" => "t.assigned_at DESC NULLS LAST, t.id DESC",
+        _ => "COALESCE(t.first_received_at, t.created_at) DESC, t.id DESC",
+    };
     let sql = format!(
         "SELECT t.id,t.status,t.priority,t.issue_type,t.school_name,t.school_njiis_id,t.school_verification,t.sender_name,t.sender_email,
                 t.original_subject,t.assigned_staff,t.updated_at,t.last_email_received_at,t.next_followup_date,t.possible_duplicate_of,
-                EXISTS(SELECT 1 FROM email_drafts d WHERE d.ticket_id=t.id)
-         FROM tickets t WHERE {w} ORDER BY t.updated_at DESC, t.id DESC LIMIT {limit} OFFSET {}",
+                COALESCE(t.first_received_at, t.created_at), t.completed_at, t.needs_review, {LOW_CONF_SQL},
+                (SELECT COUNT(*) FROM ticket_issues i WHERE i.ticket_id=t.id),
+                t.assignee_staff_id, (SELECT display_name FROM staff s WHERE s.id=t.assignee_staff_id), t.assigned_at, t.ownership_conflict,
+                t.scope_state, t.scope_reason, t.ticket_ref,
+                (SELECT COUNT(*) FROM ticket_email_links l JOIN email_messages m ON m.id=l.message_id
+                  WHERE l.ticket_id=t.id AND l.link_type IN ('original','reply') AND m.is_internal=0 AND m.scope_state='in')
+         FROM tickets t WHERE {w} ORDER BY {order} LIMIT {limit} OFFSET {}",
         q.offset.max(0)
     );
     let mut st = conn.prepare(&sql)?;
@@ -262,13 +433,32 @@ pub fn list(conn: &Connection, q: &ListQuery) -> AppResult<ListResult> {
                 last_email_received_at: r.get(12)?,
                 next_followup_date: r.get(13)?,
                 possible_duplicate_of: r.get(14)?,
-                has_draft: r.get::<_, i64>(15)? != 0,
+                first_received_at: r.get(15)?,
+                completed_at: r.get(16)?,
+                needs_review: r.get::<_, i64>(17)? != 0,
+                low_confidence: r.get::<_, i64>(18)? != 0,
+                issue_count: r.get(19)?,
+                assignee_staff_id: r.get(20)?,
+                assignee_name: r.get(21)?,
+                assigned_at: r.get(22)?,
+                ownership_conflict: r.get::<_, i64>(23)? != 0,
+                scope_state: r.get(24)?,
+                scope_reason: r.get(25)?,
+                ticket_ref: r.get(26)?,
+                in_scope_count: r.get(27)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
-    let mut st = conn.prepare("SELECT status, COUNT(*) FROM tickets GROUP BY status")?;
+    let mut st = conn.prepare("SELECT scope_state, COUNT(*) FROM tickets GROUP BY scope_state")?;
     let counts = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<Result<Vec<_>, _>>()?;
     Ok(ListResult { rows, total, counts })
+}
+
+/// Accept RFC3339 instants (any offset) and store/compare them as UTC "YYYY-MM-DDTHH:MM:SSZ".
+fn normalize_instant(s: &str) -> AppResult<String> {
+    chrono::DateTime::parse_from_rfc3339(s.trim())
+        .map(|d| d.with_timezone(&chrono::Utc).to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+        .map_err(|_| AppError::coded("INVALID", format!("Invalid date filter: {s}")))
 }
 
 // ---------------------------------------------------------------- fields
@@ -408,6 +598,7 @@ pub fn set_field(conn: &Connection, ticket_id: i64, key: &str, value: Option<Str
         refresh_school_columns(&tx, ticket_id)?;
     }
     touch(&tx, ticket_id)?;
+    crate::search::reindex(&tx, ticket_id)?;
     tx.commit()?;
     fields(conn, ticket_id)?
         .into_iter()
@@ -428,7 +619,9 @@ pub struct TicketPatch {
     pub next_followup_date: Option<String>,
     pub sender_name: Option<String>,
     pub sender_email: Option<String>,
+    pub staff_actions: Option<String>,
     pub clear_duplicate_flag: Option<bool>,
+    pub clear_needs_review: Option<bool>,
 }
 
 pub fn update(conn: &Connection, id: i64, p: &TicketPatch, actor: &str) -> AppResult<Ticket> {
@@ -456,10 +649,21 @@ pub fn update(conn: &Connection, id: i64, p: &TicketPatch, actor: &str) -> AppRe
         if !STATUSES.contains(&s.as_str()) {
             return Err(AppError::coded("INVALID", "Unknown status"));
         }
-        if *s != cur.status {
-            tx.execute("UPDATE tickets SET status=?2 WHERE id=?1", params![id, s])?;
-            history(&tx, id, actor, "Status changed", Some("status"), Some(&cur.status), Some(s))?;
+        if s == DONE && cur.status != DONE {
+            // Done requires the Outlook completion steps; see completion.rs (Mark Done).
+            return Err(AppError::coded("INVALID", "Use Mark Done to complete a ticket."));
+        }
+        if (s == ASSIGNED || s == UNASSIGNED) && *s != cur.status {
+            return Err(AppError::coded("INVALID", "Use Assign / Reassign to change the owner."));
+        }
+        if s == IN_PROGRESS && cur.status == DONE {
+            reopen(&tx, id, actor, "Reopened by staff")?;
             changed = true;
+        } else if s == IN_PROGRESS && cur.status == ASSIGNED {
+            start_work_tx(&tx, id, actor)?;
+            changed = true;
+        } else if s == IN_PROGRESS && cur.status == UNASSIGNED {
+            return Err(AppError::coded("INVALID", "Assign the ticket before starting work."));
         }
     }
     if let Some(s) = &p.priority {
@@ -478,6 +682,11 @@ pub fn update(conn: &Connection, id: i64, p: &TicketPatch, actor: &str) -> AppRe
         }
         if *it != cur.issue_type || cur.issue_type_source != "manual" {
             tx.execute("UPDATE tickets SET issue_type=?2, issue_type_source='manual' WHERE id=?1", params![id, it])?;
+            tx.execute(
+                "INSERT INTO ticket_issues(ticket_id,issue_type,source,position) VALUES(?1,?2,'manual',-1)
+                 ON CONFLICT(ticket_id,issue_type) DO UPDATE SET source='manual', position=-1",
+                params![id, it],
+            )?;
             history(&tx, id, actor, "Issue type set", Some("issue_type"), Some(&cur.issue_type), Some(it))?;
             changed = true;
         }
@@ -488,16 +697,188 @@ pub fn update(conn: &Connection, id: i64, p: &TicketPatch, actor: &str) -> AppRe
     upd!(next_followup_date, "next_followup_date", |v: &str| v.is_empty() || chrono::NaiveDate::parse_from_str(v, "%Y-%m-%d").is_ok());
     upd!(sender_name, "sender_name", |v: &str| v.len() <= 300);
     upd!(sender_email, "sender_email", |v: &str| v.is_empty() || (v.contains('@') && v.len() <= 300));
+    upd!(staff_actions, "staff_actions", |v: &str| v.len() <= 50_000);
     if p.clear_duplicate_flag == Some(true) && cur.possible_duplicate_of.is_some() {
         tx.execute("UPDATE tickets SET possible_duplicate_of=NULL WHERE id=?1", [id])?;
         history(&tx, id, actor, "Duplicate flag cleared", None, cur.possible_duplicate_of.map(display_id).as_deref(), None)?;
         changed = true;
     }
+    if p.clear_needs_review == Some(true) && cur.needs_review {
+        tx.execute("UPDATE tickets SET needs_review=0 WHERE id=?1", [id])?;
+        history(&tx, id, actor, "Review flag cleared", None, None, None)?;
+        changed = true;
+    }
     if changed {
         touch(&tx, id)?;
+        crate::search::reindex(&tx, id)?;
     }
     tx.commit()?;
     get(conn, id)
+}
+
+/// Reopen a Done ticket (local status only - Outlook is not touched): back to In Progress when it has
+/// an owner, otherwise Unassigned. Explicit Reopen is required before a Done ticket can be assigned.
+pub fn reopen(conn: &Connection, id: i64, actor: &str, reason: &str) -> AppResult<()> {
+    let (cur, assignee): (String, Option<i64>) = conn.query_row("SELECT status, assignee_staff_id FROM tickets WHERE id=?1", [id], |r| Ok((r.get(0)?, r.get(1)?)))?;
+    if cur != DONE {
+        return Ok(());
+    }
+    let new = if assignee.is_some() { IN_PROGRESS } else { UNASSIGNED };
+    conn.execute("UPDATE tickets SET status=?2, completed_at=NULL, updated_at=?3 WHERE id=?1", params![id, new, now()])?;
+    history(conn, id, actor, reason, Some("status"), Some(&cur), Some(new))?;
+    Ok(())
+}
+
+fn start_work_tx(conn: &Connection, id: i64, actor: &str) -> AppResult<()> {
+    conn.execute("UPDATE tickets SET status=?2, updated_at=?3 WHERE id=?1 AND status=?4", params![id, IN_PROGRESS, now(), ASSIGNED])?;
+    history(conn, id, actor, "Work started", Some("status"), Some(ASSIGNED), Some(IN_PROGRESS))?;
+    Ok(())
+}
+
+/// Start Work: Assigned -> In Progress, keeping the owner.
+pub fn start_work(conn: &Connection, id: i64, actor: &str) -> AppResult<Ticket> {
+    update(conn, id, &TicketPatch { status: Some(IN_PROGRESS.into()), ..Default::default() }, actor)
+}
+
+/// Stable reference for a ticket, the same on every computer that imports the same original email
+/// (derived from its Internet Message-ID). Local T-numbers differ between computers.
+pub fn ensure_ticket_ref(conn: &Connection, id: i64) -> AppResult<String> {
+    if let Some(r) = conn.query_row("SELECT ticket_ref FROM tickets WHERE id=?1", [id], |r| r.get::<_, Option<String>>(0))? {
+        return Ok(r);
+    }
+    let imid: Option<String> = conn
+        .query_row(
+            "SELECT m.internet_message_id FROM ticket_email_links l JOIN email_messages m ON m.id=l.message_id
+             WHERE l.ticket_id=?1 AND COALESCE(m.internet_message_id,'')<>'' ORDER BY (l.link_type='original') DESC, m.received_at, m.id LIMIT 1",
+            [id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let seed = match imid {
+        Some(i) => i,
+        None => conn.query_row("SELECT 'local|' || id || '|' || created_at || '|' || COALESCE(original_subject,'') FROM tickets WHERE id=?1", [id], |r| r.get(0))?,
+    };
+    let r = format!("ASR-{:08X}", (crate::scope::fnv64(&seed) >> 32) as u32);
+    conn.execute("UPDATE tickets SET ticket_ref=?2 WHERE id=?1", params![id, r])?;
+    Ok(r)
+}
+
+/// Mark a ticket Done locally. Only called by `completion` after the required Outlook steps succeeded.
+pub fn set_done(conn: &Connection, id: i64, actor: &str, note: &str) -> AppResult<()> {
+    let ts = now();
+    let cur: String = conn.query_row("SELECT status FROM tickets WHERE id=?1", [id], |r| r.get(0))?;
+    conn.execute("UPDATE tickets SET status=?2, completed_at=?3, updated_at=?3 WHERE id=?1", params![id, DONE, ts])?;
+    history(conn, id, actor, note, Some("status"), Some(&cur), Some(DONE))?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------- issues and schools
+
+pub fn issues(conn: &Connection, ticket_id: i64) -> AppResult<Vec<IssueRow>> {
+    let mut st = conn.prepare("SELECT issue_type, source, position FROM ticket_issues WHERE ticket_id=?1 ORDER BY position, issue_type")?;
+    let v = st
+        .query_map([ticket_id], |r| Ok(IssueRow { issue_type: r.get(0)?, source: r.get(1)?, position: r.get(2)? }))?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(v)
+}
+
+/// Staff sets the ticket's issue types (first = primary). Later scans never change a staff selection.
+pub fn set_issues(conn: &Connection, ticket_id: i64, list: &[String], actor: &str) -> AppResult<Vec<IssueRow>> {
+    let cat = catalog();
+    let mut clean: Vec<String> = Vec::new();
+    for i in list {
+        if cat.issue(i).is_none() {
+            return Err(AppError::coded("INVALID", format!("Unknown issue type {i}")));
+        }
+        if !clean.contains(i) {
+            clean.push(i.clone());
+        }
+    }
+    if clean.is_empty() {
+        return Err(AppError::coded("INVALID", "Select at least one issue type."));
+    }
+    let tx = conn.unchecked_transaction()?;
+    let before: Vec<String> = issues(&tx, ticket_id)?.into_iter().map(|i| i.issue_type).collect();
+    tx.execute("DELETE FROM ticket_issues WHERE ticket_id=?1", [ticket_id])?;
+    for (pos, i) in clean.iter().enumerate() {
+        tx.execute("INSERT INTO ticket_issues(ticket_id,issue_type,source,position) VALUES(?1,?2,'manual',?3)", params![ticket_id, i, pos as i64])?;
+    }
+    tx.execute("UPDATE tickets SET issue_type=?2, issue_type_source='manual' WHERE id=?1", params![ticket_id, clean[0]])?;
+    if before != clean {
+        history(&tx, ticket_id, actor, "Issue types set", Some("issue_type"), Some(&before.join(", ")), Some(&clean.join(", ")))?;
+    }
+    touch(&tx, ticket_id)?;
+    crate::search::reindex(&tx, ticket_id)?;
+    tx.commit()?;
+    issues(conn, ticket_id)
+}
+
+pub fn school_slots(conn: &Connection, ticket_id: i64) -> AppResult<Vec<i64>> {
+    let mut st = conn.prepare("SELECT slot FROM ticket_schools WHERE ticket_id=?1 AND removed=0 ORDER BY slot")?;
+    let v: Vec<i64> = st.query_map([ticket_id], |r| r.get(0))?.collect::<Result<_, _>>()?;
+    Ok(if v.is_empty() { vec![1] } else { v })
+}
+
+fn ensure_school_slot(conn: &Connection, ticket_id: i64, slot: i64, actor: &str) -> AppResult<()> {
+    conn.execute(
+        "INSERT OR IGNORE INTO ticket_schools(ticket_id,slot,created_by,created_at) VALUES(?1,?2,?3,?4)",
+        params![ticket_id, slot, actor, now()],
+    )?;
+    Ok(())
+}
+
+pub fn add_school(conn: &Connection, ticket_id: i64, actor: &str) -> AppResult<i64> {
+    get(conn, ticket_id)?;
+    let next: i64 = conn.query_row("SELECT COALESCE(MAX(slot),0)+1 FROM ticket_schools WHERE ticket_id=?1", [ticket_id], |r| r.get(0))?;
+    let next = next.max(2);
+    ensure_school_slot(conn, ticket_id, 1, SYSTEM)?;
+    ensure_school_slot(conn, ticket_id, next, actor)?;
+    history(conn, ticket_id, actor, "School added", None, None, Some(&format!("School {next}")))?;
+    touch(conn, ticket_id)?;
+    Ok(next)
+}
+
+/// Hide a school group. Its field values stay stored (and in history); a removed group is not shown or prompted.
+pub fn remove_school(conn: &Connection, ticket_id: i64, slot: i64, actor: &str) -> AppResult<()> {
+    if slot <= 1 {
+        return Err(AppError::coded("INVALID", "The first school group cannot be removed; clear its fields instead."));
+    }
+    conn.execute("UPDATE ticket_schools SET removed=1 WHERE ticket_id=?1 AND slot=?2", params![ticket_id, slot])?;
+    history(conn, ticket_id, actor, "School removed", None, Some(&format!("School {slot}")), None)?;
+    touch(conn, ticket_id)?;
+    crate::search::reindex(conn, ticket_id)?;
+    Ok(())
+}
+
+pub fn completion_rows(conn: &Connection, ticket_id: i64) -> AppResult<Vec<CompletionRow>> {
+    let mut st = conn.prepare(
+        "SELECT message_id, flagged_at, moved_at, dest_path, last_error, last_error_at, attempts FROM message_completion WHERE ticket_id=?1 ORDER BY message_id",
+    )?;
+    let v = st
+        .query_map([ticket_id], |r| {
+            Ok(CompletionRow {
+                message_id: r.get(0)?,
+                flagged_at: r.get(1)?,
+                moved_at: r.get(2)?,
+                dest_path: r.get(3)?,
+                last_error: r.get(4)?,
+                last_error_at: r.get(5)?,
+                attempts: r.get(6)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(v)
+}
+
+/// Remember the prompt text that was copied to the clipboard.
+pub fn record_prompt(conn: &Connection, ticket_id: i64, text: &str, actor: &str) -> AppResult<String> {
+    let ts = now();
+    let n = conn.execute("UPDATE tickets SET last_prompt=?2, last_prompt_at=?3 WHERE id=?1", params![ticket_id, text, ts])?;
+    if n == 0 {
+        return Err(AppError::coded("NOT_FOUND", format!("Ticket {} not found", display_id(ticket_id))));
+    }
+    history(conn, ticket_id, actor, "Copilot prompt copied", None, None, Some(&format!("{} characters", text.chars().count())))?;
+    Ok(ts)
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -523,15 +904,33 @@ pub fn create_manual(conn: &Connection, n: &NewTicket, settings: &Settings, acto
         (analysis.issue_type.clone(), "auto")
     };
     tx.execute(
-        "INSERT INTO tickets(status,priority,issue_type,issue_type_source,classification_confidence,sender_name,sender_email,original_subject,assigned_staff,source,created_at,updated_at)
-         VALUES('New','Normal',?1,?2,?3,NULLIF(?4,''),NULLIF(?5,''),NULLIF(?6,''),NULLIF(?7,''),'manual',?8,?8)",
-        params![issue, source, analysis.confidence, n.sender_name.trim(), n.sender_email.trim(), n.subject.trim(), settings.default_assigned_staff, ts],
+        "INSERT INTO tickets(status,priority,issue_type,issue_type_source,classification_confidence,sender_name,sender_email,original_subject,assigned_staff,source,created_at,updated_at,first_received_at)
+         VALUES(?9,'Normal',?1,?2,?3,NULLIF(?4,''),NULLIF(?5,''),NULLIF(?6,''),NULLIF(?7,''),'manual',?8,?8,?8)",
+        params![issue, source, analysis.confidence, n.sender_name.trim(), n.sender_email.trim(), n.subject.trim(), settings.default_assigned_staff, ts, UNASSIGNED],
     )?;
     let id = tx.last_insert_rowid();
+    let issue_list = if source == "manual" { vec![issue.clone()] } else { analysis.issues.clone() };
+    for (pos, i) in issue_list.iter().enumerate() {
+        tx.execute("INSERT OR IGNORE INTO ticket_issues(ticket_id,issue_type,source,position) VALUES(?1,?2,?3,?4)", params![id, i, source, pos as i64])?;
+    }
+    for slot in 1..=analysis.school_count.max(1) {
+        ensure_school_slot(&tx, id, slot, SYSTEM)?;
+    }
     for e in &analysis.fields {
         set_extracted(&tx, id, &e.key, &e.value, &e.confidence, false)?;
     }
+    if !n.body.trim().is_empty() {
+        // keep the pasted text as the ticket's original message so it is searchable and used in the prompt
+        tx.execute(
+            "INSERT INTO email_messages(subject,sender_name,sender_email,received_at,body_text,imported_at) VALUES(?1,?2,?3,?4,?5,?4)",
+            params![n.subject.trim(), n.sender_name.trim(), n.sender_email.trim().to_lowercase(), ts, n.body],
+        )?;
+        let mid = tx.last_insert_rowid();
+        tx.execute("INSERT INTO ticket_email_links(ticket_id,message_id,link_type,linked_at) VALUES(?1,?2,'manual',?3)", params![id, mid, ts])?;
+    }
     history(&tx, id, actor, "Ticket created manually", None, None, Some(&issue))?;
+    ensure_ticket_ref(&tx, id)?;
+    crate::scope::recompute_ticket(&tx, id, actor)?;
     tx.commit()?;
     if !n.school_njiis_id.trim().is_empty() {
         set_field(conn, id, "school_njiis_id", Some(n.school_njiis_id.clone()), false, actor)?;
@@ -540,12 +939,14 @@ pub fn create_manual(conn: &Connection, n: &NewTicket, settings: &Settings, acto
         set_field(conn, id, "school_name", Some(n.school_name.clone()), false, actor)?;
     }
     refresh_school_columns(conn, id)?;
+    crate::search::reindex(conn, id)?;
     Ok(id)
 }
 
 pub fn messages(conn: &Connection, ticket_id: i64) -> AppResult<Vec<MessageRow>> {
     let mut st = conn.prepare(
-        "SELECT m.id,m.subject,m.sender_name,m.sender_email,m.received_at,m.body_text,m.body_truncated,m.folder_path,l.link_type,m.is_internal,m.has_attachments,m.entry_id,m.store_id
+        "SELECT m.id,m.subject,m.sender_name,m.sender_email,m.received_at,m.body_text,m.body_truncated,m.folder_path,l.link_type,m.is_internal,m.has_attachments,m.entry_id,m.store_id,
+                m.scope_state,m.out_reason,m.location_status,m.location_checked_at,(SELECT display_name FROM staff s WHERE s.id=m.owner_staff_id)
          FROM ticket_email_links l JOIN email_messages m ON m.id=l.message_id WHERE l.ticket_id=?1 ORDER BY m.received_at DESC, m.id DESC",
     )?;
     let v = st
@@ -564,6 +965,11 @@ pub fn messages(conn: &Connection, ticket_id: i64) -> AppResult<Vec<MessageRow>>
                 has_attachments: r.get::<_, i64>(10)? != 0,
                 entry_id: r.get(11)?,
                 store_id: r.get(12)?,
+                scope_state: r.get(13)?,
+                out_reason: r.get(14)?,
+                location_status: r.get(15)?,
+                location_checked_at: r.get(16)?,
+                owner_name: r.get(17)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -581,7 +987,16 @@ pub fn history_rows(conn: &Connection, ticket_id: i64) -> AppResult<Vec<HistoryR
 }
 
 pub fn detail(conn: &Connection, id: i64) -> AppResult<TicketDetail> {
-    Ok(TicketDetail { ticket: get(conn, id)?, fields: fields(conn, id)?, messages: messages(conn, id)?, history: history_rows(conn, id)? })
+    Ok(TicketDetail {
+        ticket: get(conn, id)?,
+        fields: fields(conn, id)?,
+        messages: messages(conn, id)?,
+        history: history_rows(conn, id)?,
+        issues: issues(conn, id)?,
+        schools: school_slots(conn, id)?,
+        completion: completion_rows(conn, id)?,
+        assignments: crate::assignment::ops(conn, id)?,
+    })
 }
 
 /// Placeholder context for a ticket.
@@ -621,6 +1036,10 @@ pub struct IncomingMessage {
     pub body_truncated: bool,
     pub has_attachments: bool,
     pub metadata: serde_json::Value,
+    /// EntryIDs of the folder's parents (parent first, up to the store root)
+    pub folder_ancestors: Vec<String>,
+    /// Set when the email is an assignment notification sent by this app (never imported)
+    pub notification_id: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -632,8 +1051,19 @@ pub struct IngestReport {
     pub created_tickets: usize,
     pub updated_tickets: usize,
     pub skipped_internal: usize,
+    pub skipped_notifications: usize,
     pub duplicates_flagged: usize,
     pub max_received_at: Option<String>,
+}
+
+/// Location fields of a scanned email: (ancestors JSON, inferred owner, scope membership).
+fn scanned_location(m: &IncomingMessage, scope: &crate::scope::ScopeCfg, staff: &[crate::staff::Staff]) -> (String, Option<i64>, &'static str) {
+    let mut chain = vec![m.folder_entry_id.clone()];
+    chain.extend(m.folder_ancestors.iter().cloned());
+    let owner = crate::staff::owner_for(staff, &chain);
+    // found by a scan of the selected scope; with ancestors we can double-check (scans never read excluded folders)
+    let st = if m.folder_ancestors.is_empty() || crate::scope::in_scope(scope, &chain) { "in" } else { "out" };
+    (serde_json::to_string(&m.folder_ancestors).unwrap_or_else(|_| "[]".into()), owner, st)
 }
 
 fn find_message(conn: &Connection, m: &IncomingMessage) -> AppResult<Option<(i64, Option<String>, Option<String>)>> {
@@ -664,26 +1094,42 @@ fn find_message(conn: &Connection, m: &IncomingMessage) -> AppResult<Option<(i64
 pub fn ingest(conn: &Connection, msgs: &[IncomingMessage], settings: &Settings) -> AppResult<IngestReport> {
     let cat = catalog();
     let mut rep = IngestReport::default();
+    let scope = crate::scope::cfg(settings);
+    let staff = crate::staff::list(conn, true)?;
+    let mut touched: std::collections::BTreeSet<i64> = Default::default();
     let tx = conn.unchecked_transaction()?;
     for m in msgs {
         rep.seen += 1;
         if rep.max_received_at.as_deref().map(|x| m.received_at.as_str() > x).unwrap_or(true) && !m.received_at.is_empty() {
             rep.max_received_at = Some(m.received_at.clone());
         }
+        // 0. assignment notifications sent by this app never become tickets or ticket emails
+        if !m.notification_id.is_empty() {
+            rep.skipped_notifications += 1;
+            continue;
+        }
+        let (ancestors, owner, scope_state) = scanned_location(m, &scope, &staff);
         // 1. dedup by Internet Message ID / EntryID; detect folder moves
         if let Some((mid, old_entry, old_path)) = find_message(&tx, m)? {
             rep.already_imported += 1;
             let moved = old_entry.as_deref() != Some(m.entry_id.as_str()) || old_path.as_deref() != Some(m.folder_path.as_str());
-            if moved && !m.entry_id.is_empty() {
+            if !m.entry_id.is_empty() {
+                // seen by a scan: confirmed location (also when unchanged)
                 tx.execute(
-                    "UPDATE email_messages SET entry_id=?2, store_id=?3, folder_entry_id=?4, folder_path=?5 WHERE id=?1",
-                    params![mid, m.entry_id, m.store_id, m.folder_entry_id, m.folder_path],
+                    "UPDATE email_messages SET entry_id=?2, store_id=?3, folder_entry_id=?4, folder_path=?5, folder_ancestors=?6, owner_staff_id=?7,
+                       scope_state=?8, scope_key=?9, location_status='found', location_checked_at=?10, out_reason=NULL WHERE id=?1",
+                    params![mid, m.entry_id, m.store_id, m.folder_entry_id, m.folder_path, ancestors, owner, scope_state, scope.key, now()],
                 )?;
-                let mut st = tx.prepare("SELECT ticket_id FROM ticket_email_links WHERE message_id=?1")?;
-                let tids: Vec<i64> = st.query_map([mid], |r| r.get(0))?.collect::<Result<_, _>>()?;
-                for tid in tids {
+            }
+            let mut st = tx.prepare("SELECT ticket_id FROM ticket_email_links WHERE message_id=?1")?;
+            let tids: Vec<i64> = st.query_map([mid], |r| r.get(0))?.collect::<Result<_, _>>()?;
+            for tid in tids {
+                if moved && !m.entry_id.is_empty() {
                     history(&tx, tid, SYSTEM, "Email moved in Outlook", Some("folder"), old_path.as_deref(), Some(&m.folder_path))?;
                 }
+                touched.insert(tid);
+            }
+            if moved && !m.entry_id.is_empty() {
                 rep.moved += 1;
             }
             continue;
@@ -691,11 +1137,12 @@ pub fn ingest(conn: &Connection, msgs: &[IncomingMessage], settings: &Settings) 
         let internal = settings.is_internal_sender(&m.sender_email);
         let preview_meta = serde_json::to_string(&m.metadata).unwrap_or_else(|_| "{}".into());
         tx.execute(
-            "INSERT INTO email_messages(store_id,entry_id,internet_message_id,conversation_id,folder_entry_id,folder_path,subject,sender_name,sender_email,received_at,body_text,body_truncated,has_attachments,is_internal,metadata_json,imported_at)
-             VALUES(?1,?2,NULLIF(?3,''),NULLIF(?4,''),?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",
+            "INSERT INTO email_messages(store_id,entry_id,internet_message_id,conversation_id,folder_entry_id,folder_path,subject,sender_name,sender_email,received_at,body_text,body_truncated,has_attachments,is_internal,metadata_json,imported_at,
+                                        folder_ancestors,owner_staff_id,scope_state,scope_key,location_status,location_checked_at)
+             VALUES(?1,?2,NULLIF(?3,''),NULLIF(?4,''),?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,'found',?16)",
             params![m.store_id, m.entry_id, m.internet_message_id, m.conversation_id, m.folder_entry_id, m.folder_path, m.subject,
                 m.sender_name, m.sender_email.to_lowercase(), m.received_at, m.body, m.body_truncated as i64, m.has_attachments as i64,
-                internal as i64, preview_meta, now()],
+                internal as i64, preview_meta, now(), ancestors, owner, scope_state, scope.key],
         )?;
         let mid = tx.last_insert_rowid();
         rep.new_messages += 1;
@@ -716,6 +1163,7 @@ pub fn ingest(conn: &Connection, msgs: &[IncomingMessage], settings: &Settings) 
             if let Some((tid, _)) = existing {
                 tx.execute("INSERT OR IGNORE INTO ticket_email_links(ticket_id,message_id,link_type,linked_at) VALUES(?1,?2,'internal',?3)", params![tid, mid, now()])?;
                 history(&tx, tid, SYSTEM, "Staff email linked", None, None, Some(&m.subject))?;
+                crate::search::reindex(&tx, tid)?;
             }
             rep.skipped_internal += 1;
             continue;
@@ -736,11 +1184,27 @@ pub fn ingest(conn: &Connection, msgs: &[IncomingMessage], settings: &Settings) 
                     set_extracted(&tx, tid, &e.key, &e.value, &e.confidence, true)?;
                 }
             }
-            refresh_school_columns(&tx, tid)?;
-            if ["Waiting for User", "Resolved", "Closed"].contains(&status.as_str()) {
-                tx.execute("UPDATE tickets SET status='Needs Review' WHERE id=?1", [tid])?;
-                history(&tx, tid, SYSTEM, "Status changed (new email received)", Some("status"), Some(&status), Some("Needs Review"))?;
+            for slot in 1..=analysis.school_count {
+                ensure_school_slot(&tx, tid, slot, SYSTEM)?;
             }
+            // new issues mentioned in the reply are added unless staff already chose the issue types
+            let staff_issues: i64 = tx.query_row("SELECT COUNT(*) FROM ticket_issues WHERE ticket_id=?1 AND source='manual'", [tid], |r| r.get(0))?;
+            if staff_issues == 0 && analysis.issue_type != "other" {
+                for i in &analysis.issues {
+                    tx.execute(
+                        "INSERT OR IGNORE INTO ticket_issues(ticket_id,issue_type,source,position) VALUES(?1,?2,'auto',(SELECT COALESCE(MAX(position),0)+1 FROM ticket_issues WHERE ticket_id=?1))",
+                        params![tid, i],
+                    )?;
+                }
+            }
+            refresh_school_columns(&tx, tid)?;
+            // a genuinely new incoming email reopens a Done ticket (rescans never get here: dedup above)
+            if status == DONE {
+                let who = if m.sender_name.trim().is_empty() { m.sender_email.clone() } else { m.sender_name.clone() };
+                reopen(&tx, tid, SYSTEM, &format!("Reopened: new email received from {who}"))?;
+            }
+            crate::search::reindex(&tx, tid)?;
+            touched.insert(tid);
             rep.updated_tickets += 1;
             continue;
         }
@@ -748,13 +1212,20 @@ pub fn ingest(conn: &Connection, msgs: &[IncomingMessage], settings: &Settings) 
         // 3. new ticket
         let ts = now();
         tx.execute(
-            "INSERT INTO tickets(status,priority,issue_type,issue_type_source,classification_confidence,sender_name,sender_email,original_subject,assigned_staff,conversation_id,source,created_at,updated_at,last_email_received_at)
-             VALUES('New','Normal',?1,'auto',?2,NULLIF(?3,''),NULLIF(?4,''),NULLIF(?5,''),NULLIF(?6,''),NULLIF(?7,''),'outlook',?8,?8,?9)",
+            "INSERT INTO tickets(status,priority,issue_type,issue_type_source,classification_confidence,sender_name,sender_email,original_subject,assigned_staff,conversation_id,source,created_at,updated_at,last_email_received_at,first_received_at)
+             VALUES(?10,'Normal',?1,'auto',?2,NULLIF(?3,''),NULLIF(?4,''),NULLIF(?5,''),NULLIF(?6,''),NULLIF(?7,''),'outlook',?8,?8,?9,COALESCE(NULLIF(?9,''),?8))",
             params![analysis.issue_type, analysis.confidence, m.sender_name, m.sender_email.to_lowercase(), m.subject,
-                settings.default_assigned_staff, m.conversation_id, ts, m.received_at],
+                settings.default_assigned_staff, m.conversation_id, ts, m.received_at, UNASSIGNED],
         )?;
         let tid = tx.last_insert_rowid();
+        touched.insert(tid);
         tx.execute("INSERT INTO ticket_email_links(ticket_id,message_id,link_type,linked_at) VALUES(?1,?2,'original',?3)", params![tid, mid, ts])?;
+        for (pos, i) in analysis.issues.iter().enumerate() {
+            tx.execute("INSERT OR IGNORE INTO ticket_issues(ticket_id,issue_type,source,position) VALUES(?1,?2,'auto',?3)", params![tid, i, pos as i64])?;
+        }
+        for slot in 1..=analysis.school_count.max(1) {
+            ensure_school_slot(&tx, tid, slot, SYSTEM)?;
+        }
         for e in &analysis.fields {
             set_extracted(&tx, tid, &e.key, &e.value, &e.confidence, false)?;
         }
@@ -767,7 +1238,7 @@ pub fn ingest(conn: &Connection, msgs: &[IncomingMessage], settings: &Settings) 
         let school_id = analysis.get("school_njiis_id").unwrap_or("").to_string();
         let dup: Option<i64> = tx
             .query_row(
-                "SELECT id FROM tickets WHERE id<>?1 AND status<>'Closed' AND created_at>=?2 AND issue_type=?3
+                "SELECT id FROM tickets WHERE id<>?1 AND created_at>=?2 AND issue_type=?3
                    AND (COALESCE(conversation_id,'') <> ?4 OR ?4 = '')
                    AND ((sender_email IS NOT NULL AND sender_email=?5) OR (?6<>'' AND school_njiis_id=?6))
                  ORDER BY id DESC LIMIT 1",
@@ -782,9 +1253,15 @@ pub fn ingest(conn: &Connection, msgs: &[IncomingMessage], settings: &Settings) 
             rep.duplicates_flagged += 1;
         }
         if needs_review {
-            tx.execute("UPDATE tickets SET status='Needs Review' WHERE id=?1", [tid])?;
+            tx.execute("UPDATE tickets SET needs_review=1 WHERE id=?1", [tid])?;
         }
+        crate::search::reindex(&tx, tid)?;
+        ensure_ticket_ref(&tx, tid)?;
         rep.created_tickets += 1;
+    }
+    // placement (current/history) and owner inferred from staff folders - never a notification
+    for tid in touched {
+        crate::scope::recompute_ticket(&tx, tid, SYSTEM)?;
     }
     tx.commit()?;
     Ok(rep)
@@ -859,12 +1336,14 @@ pub mod tests {
         ingest(&c, &[msg(1, "C1", "Subtype", "Our school is missing the subtype.", "jane@school.org")], &s).unwrap();
         set_field(&c, 1, "school_njiis_id", Some("777777".into()), true, "staff").unwrap();
         set_field(&c, 1, "school_type", Some("Public".into()), false, "staff").unwrap();
-        update(&c, 1, &TicketPatch { status: Some("Waiting for User".into()), ..Default::default() }, "staff").unwrap();
+        set_done(&c, 1, "staff", "Marked Done").unwrap();
         let r = ingest(&c, &[msg(2, "C1", "RE: Subtype", "We are a charter school. School ID: 123456", "jane@school.org")], &s).unwrap();
         assert_eq!(r.updated_tickets, 1);
         assert_eq!(r.created_tickets, 0);
         let t = get(&c, 1).unwrap();
-        assert_eq!(t.status, "Needs Review");
+        assert_eq!(t.status, UNASSIGNED, "a new reply reopens a Done ticket (no owner -> Unassigned)");
+        assert!(t.completed_at.is_none());
+        assert!(history_rows(&c, 1).unwrap().iter().any(|h| h.action.starts_with("Reopened: new email received from")));
         assert_eq!(t.school_njiis_id.as_deref(), Some("777777"), "verified value must not be overwritten");
         assert_eq!(t.school_verification, "Verified");
         let f = fields(&c, 1).unwrap();
@@ -884,7 +1363,8 @@ pub mod tests {
         assert_eq!(r.duplicates_flagged, 1);
         let t2 = get(&c, 2).unwrap();
         assert_eq!(t2.possible_duplicate_of, Some(1));
-        assert_eq!(t2.status, "Needs Review");
+        assert_eq!(t2.status, UNASSIGNED, "review hints are badges, not statuses");
+        assert!(t2.needs_review);
         let r = ingest(&c, &[msg(3, "C9", "Internal", "note", "staff@doh.nj.gov")], &s).unwrap();
         assert_eq!(r.skipped_internal, 1);
         assert_eq!(r.created_tickets, 0);
@@ -904,16 +1384,116 @@ pub mod tests {
         let s = Settings::default();
         let id = create_manual(&c, &NewTicket { sender_name: "Ann".into(), sender_email: "ann@x.org".into(), subject: "Phone call".into(),
             body: "".into(), issue_type: "user_guide".into(), school_name: "Maple School".into(), ..Default::default() }, &s, "staff").unwrap();
-        let l = list(&c, &ListQuery { group: "open".into(), search: "maple".into(), ..Default::default() }).unwrap();
+        let l = list(&c, &ListQuery { status: UNASSIGNED.into(), search: "maple".into(), ..Default::default() }).unwrap();
         assert_eq!(l.total, 1);
         let l = list(&c, &ListQuery { search: format!("T-{id:06}"), ..Default::default() }).unwrap();
         assert_eq!(l.total, 1);
         assert!(update(&c, id, &TicketPatch { status: Some("Bogus".into()), ..Default::default() }, "staff").is_err());
-        update(&c, id, &TicketPatch { status: Some("In Progress".into()), next_followup_date: Some("2026-11-20".into()), ..Default::default() }, "staff").unwrap();
+        assert!(update(&c, id, &TicketPatch { status: Some(DONE.into()), ..Default::default() }, "staff").is_err(), "Done only via Mark Done");
+        set_done(&c, id, "staff", "Marked Done").unwrap();
+        update(&c, id, &TicketPatch { status: Some(IN_PROGRESS.into()), next_followup_date: Some("2026-11-20".into()), ..Default::default() }, "staff").unwrap();
         let h = history_rows(&c, id).unwrap();
-        assert!(h.iter().any(|x| x.action == "Status changed"));
+        assert!(h.iter().any(|x| x.action == "Reopened by staff"));
+        assert_eq!(get(&c, id).unwrap().status, UNASSIGNED, "reopened without an owner");
         // revert field to extracted
         set_field(&c, id, "school_name", None, false, "staff").unwrap();
         assert_eq!(get(&c, id).unwrap().school_name, None);
+    }
+
+    #[test]
+    fn rescan_never_reopens_and_never_overwrites_staff_values() {
+        let c = conn();
+        let s = Settings::default();
+        let m = msg(1, "C1", "Subtype", "Our school ID is 0012345. We are missing the subtype.", "jane@school.org");
+        ingest(&c, &[m.clone()], &s).unwrap();
+        set_field(&c, 1, "school_njiis_id", Some("0099999".into()), false, "staff").unwrap();
+        set_field(&c, 1, "sender_title", Some("Head Nurse".into()), false, "staff").unwrap();
+        set_done(&c, 1, "staff", "Marked Done").unwrap();
+        // the same email seen again (e.g. after it was moved to the archive folder)
+        let mut moved = m.clone();
+        moved.entry_id = "E1-archived".into();
+        moved.folder_path = "Inbox/Done".into();
+        let r = ingest(&c, &[m.clone(), moved], &s).unwrap();
+        assert_eq!(r.new_messages, 0);
+        let t = get(&c, 1).unwrap();
+        assert_eq!(t.status, DONE, "rescans never reopen");
+        assert_eq!(t.school_njiis_id.as_deref(), Some("0099999"));
+        let f = fields(&c, 1).unwrap();
+        assert_eq!(f.iter().find(|x| x.key == "sender_title").unwrap().effective, "Head Nurse");
+        // an internal (staff) message does not reopen either
+        let mut s2 = s.clone();
+        s2.internal_senders = vec!["@doh.nj.gov".into()];
+        ingest(&c, &[msg(2, "C1", "RE: Subtype", "Done on our side.", "me@doh.nj.gov")], &s2).unwrap();
+        assert_eq!(get(&c, 1).unwrap().status, DONE);
+    }
+
+    #[test]
+    fn search_covers_fields_bodies_notes_and_leading_zero_ids() {
+        let c = conn();
+        let s = Settings::default();
+        ingest(&c, &[msg(1, "C1", "Webinar", "The webinar shows a black screen. Our school ID is 0012345.\nThanks,\nAnn Lee\nSchool Nurse\nPhone: 609-555-0100 x12", "ann@school.org")], &s).unwrap();
+        ingest(&c, &[msg(2, "C2", "Account", "I need an account. ASR ID: Q-778 for Oak Academy.", "bob@other.org")], &s).unwrap();
+        update(&c, 2, &TicketPatch { internal_notes: Some("called the principal".into()), staff_actions: Some("Reset password".into()), ..Default::default() }, "staff").unwrap();
+        let find = |q: &str| list(&c, &ListQuery { search: q.into(), ..Default::default() }).unwrap().rows.iter().map(|r| r.id).collect::<Vec<_>>();
+        assert_eq!(find("0012345"), vec![1], "leading-zero NJIIS ID");
+        assert_eq!(find("609-555-0100"), vec![1], "sender phone");
+        assert_eq!(find("black screen"), vec![1], "email body");
+        assert_eq!(find("Q-778"), vec![2], "other school ID");
+        assert_eq!(find("principal"), vec![2], "staff notes");
+        assert_eq!(find("reset password"), vec![2], "staff actions");
+        assert_eq!(find("bob@other.org"), vec![2], "sender email");
+        assert_eq!(find("T-000002"), vec![2], "ticket ID");
+        assert!(find("nonexistentword").is_empty());
+        let l = list(&c, &ListQuery { issue_type: "webinar_issue".into(), ..Default::default() }).unwrap();
+        assert_eq!(l.total, 1);
+    }
+
+    #[test]
+    fn date_filters_are_inclusive_and_sortable() {
+        let c = conn();
+        let s = Settings::default();
+        let mut a = msg(1, "C1", "a", "user guide please", "a@x.org");
+        a.received_at = "2026-11-10T04:59:00Z".into(); // Nov 9, 23:59 in New York (UTC-5)
+        let mut b = msg(2, "C2", "b", "user guide please", "b@x.org");
+        b.received_at = "2026-11-10T05:00:00Z".into(); // Nov 10, 00:00 in New York
+        let mut d = msg(3, "C3", "d", "user guide please", "d@x.org");
+        d.received_at = "2026-11-11T04:59:59Z".into(); // Nov 10, 23:59:59 in New York
+        ingest(&c, &[a, b, d], &s).unwrap();
+        // the UI sends local midnight of the start date and local midnight of the day after the end date
+        let q = ListQuery { received_from: "2026-11-10T00:00:00-05:00".into(), received_to: "2026-11-11T00:00:00-05:00".into(), ..Default::default() };
+        let ids: Vec<i64> = list(&c, &q).unwrap().rows.iter().map(|r| r.id).collect();
+        assert_eq!(ids, vec![3, 2], "end date inclusive, previous day excluded, newest first");
+        set_done(&c, 2, "staff", "Marked Done").unwrap();
+        c.execute("UPDATE tickets SET completed_at='2026-11-12T15:00:00Z' WHERE id=2", []).unwrap();
+        let q = ListQuery { completed_from: "2026-11-12T00:00:00-05:00".into(), completed_to: "2026-11-13T00:00:00-05:00".into(), ..Default::default() };
+        assert_eq!(list(&c, &q).unwrap().total, 1);
+        let q = ListQuery { status: DONE.into(), ..Default::default() };
+        assert_eq!(list(&c, &q).unwrap().total, 1);
+        let sorted = list(&c, &ListQuery { sort: "completed".into(), ..Default::default() }).unwrap();
+        assert_eq!(sorted.rows[0].id, 2, "completed tickets first when sorting by completion date");
+        let page = list(&c, &ListQuery { limit: 2, offset: 2, ..Default::default() }).unwrap();
+        assert_eq!((page.total, page.rows.len()), (3, 1), "paging");
+        assert!(list(&c, &ListQuery { received_from: "yesterday".into(), ..Default::default() }).is_err());
+    }
+
+    #[test]
+    fn issues_and_schools_are_editable() {
+        let c = conn();
+        let s = Settings::default();
+        ingest(&c, &[msg(1, "C1", "Black screen", "The webinar shows a black screen.", "a@b.org")], &s).unwrap();
+        let v = set_issues(&c, 1, &["school_subtype_missing".into(), "webinar_issue".into()], "staff").unwrap();
+        assert_eq!(v.len(), 2);
+        assert_eq!(get(&c, 1).unwrap().issue_type, "school_subtype_missing");
+        assert!(set_issues(&c, 1, &[], "staff").is_err());
+        let slot = add_school(&c, 1, "staff").unwrap();
+        assert_eq!(slot, 2);
+        set_field(&c, 1, &crate::analyzer::school_key(2, "njiis_id"), Some("0001".into()), false, "staff").unwrap();
+        assert_eq!(school_slots(&c, 1).unwrap(), vec![1, 2]);
+        remove_school(&c, 1, 2, "staff").unwrap();
+        assert_eq!(school_slots(&c, 1).unwrap(), vec![1]);
+        assert!(remove_school(&c, 1, 1, "staff").is_err());
+        // a reply does not override the staff issue selection
+        ingest(&c, &[msg(2, "C1", "RE", "How do I save the form as a PDF?", "a@b.org")], &s).unwrap();
+        assert_eq!(issues(&c, 1).unwrap().len(), 2);
     }
 }

@@ -219,6 +219,62 @@ pub fn unresolved(subject: &str, body: &str) -> Vec<Unresolved> {
         .collect()
 }
 
+static RE_DROP: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?is)<(script|style|head)\b.*?</(script|style|head)\s*>|<!--.*?-->").unwrap());
+static RE_BR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)<br\s*/?>").unwrap());
+static RE_BLOCK_END: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)</(p|div|h[1-6]|tr|table|ul|ol|blockquote)\s*>").unwrap());
+static RE_LI: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)<li\b[^>]*>").unwrap());
+static RE_LI_END: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)</li\s*>").unwrap());
+static RE_IMG: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)<img\b[^>]*>").unwrap());
+static RE_ALT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"(?i)\balt\s*=\s*"([^"]*)""#).unwrap());
+static RE_TAG: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?s)<[^>]*>").unwrap());
+static RE_ENTITY: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"&(#[0-9]{1,7}|#[xX][0-9a-fA-F]{1,6}|[a-zA-Z]{2,8});").unwrap());
+static RE_BLANKS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\n{3,}").unwrap());
+
+/// Readable plain text from HTML: block elements become line breaks, list items get "- ",
+/// images become "[Image: alt]", entities are decoded. Paragraph breaks are kept.
+pub fn html_to_text(html: &str) -> String {
+    let s = RE_DROP.replace_all(html, "");
+    let s = RE_BR.replace_all(&s, "\n");
+    let s = RE_LI.replace_all(&s, "\n- ");
+    let s = RE_LI_END.replace_all(&s, "");
+    let s = RE_BLOCK_END.replace_all(&s, "\n\n");
+    let s = RE_IMG.replace_all(&s, |c: &regex::Captures| match RE_ALT.captures(&c[0]).map(|a| a[1].trim().to_string()) {
+        Some(alt) if !alt.is_empty() => format!("[Image: {alt}]"),
+        _ => "[Image]".into(),
+    });
+    let s = RE_TAG.replace_all(&s, "");
+    let s = RE_ENTITY.replace_all(&s, |c: &regex::Captures| {
+        let e = &c[1];
+        let ch = if let Some(hex) = e.strip_prefix("#x").or_else(|| e.strip_prefix("#X")) {
+            u32::from_str_radix(hex, 16).ok().and_then(char::from_u32)
+        } else if let Some(dec) = e.strip_prefix('#') {
+            dec.parse::<u32>().ok().and_then(char::from_u32)
+        } else {
+            match e {
+                "amp" => Some('&'),
+                "lt" => Some('<'),
+                "gt" => Some('>'),
+                "quot" => Some('"'),
+                "apos" => Some('\''),
+                "nbsp" => Some(' '),
+                "ndash" => Some('–'),
+                "mdash" => Some('—'),
+                "rsquo" => Some('’'),
+                "lsquo" => Some('‘'),
+                "rdquo" => Some('”'),
+                "ldquo" => Some('“'),
+                "hellip" => Some('…'),
+                "bull" => Some('•'),
+                _ => None,
+            }
+        };
+        ch.map(|c| c.to_string()).unwrap_or_else(|| c[0].to_string())
+    });
+    let lines: Vec<&str> = s.lines().map(|l| l.trim_end()).collect();
+    let joined = lines.join("\n");
+    RE_BLANKS.replace_all(joined.trim(), "\n\n").into_owned()
+}
+
 /// Context filled with catalog sample values (template preview without a ticket).
 pub fn sample_ctx() -> Ctx {
     let mut ctx = Ctx::new();
@@ -309,6 +365,12 @@ mod tests {
         assert_eq!(select_template(&t, &ctx).unwrap().id, "fallback");
         put(&mut ctx, "s", "Yes", true);
         assert_eq!(select_template(&t, &ctx).unwrap().id, "confirm");
+    }
+
+    #[test]
+    fn html_to_text_keeps_structure() {
+        let html = "<style>p{}</style><p>Hello&nbsp;Jane,</p><p>Steps:<br>one &amp; two</p><ul><li>Clear cache</li><li>Retry</li></ul><img src=\"cid:x\" alt=\"Screenshot\"><div>Thanks &#8212; Desk</div>";
+        assert_eq!(html_to_text(html), "Hello Jane,\n\nSteps:\none & two\n\n- Clear cache\n- Retry\n\n[Image: Screenshot]Thanks — Desk");
     }
 
     #[test]

@@ -17,9 +17,12 @@ pub struct AppState {
     pub data_dir: PathBuf,
     pub images_dir: PathBuf,
     pub resource_dir: Option<PathBuf>,
-    pub dev_worker_dir: PathBuf,
+    /// Source-checkout worker folder; development builds only (release builds never depend on the source tree).
+    pub dev_worker_dir: Option<PathBuf>,
     pub sync: sync::SyncController,
     pub startup_ms: AtomicU64,
+    /// Tickets with a Mark Done run in progress (blocks repeated clicks).
+    pub completing: Mutex<std::collections::HashSet<i64>>,
     _log_guard: Mutex<Option<tracing_appender::non_blocking::WorkerGuard>>,
 }
 
@@ -113,7 +116,12 @@ pub fn run() {
                 tracing::warn!(error = %e, "could not write SOP images");
             }
             let resource_dir = app.path().resource_dir().ok();
-            let dev_worker_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../outlook_worker");
+            let dev_worker_dir: Option<PathBuf> =
+                if cfg!(debug_assertions) { Some(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../outlook_worker")) } else { None };
+            match crate::outlook::WorkerConfig::resolve(&settings.python_path, resource_dir.as_deref(), dev_worker_dir.as_deref()) {
+                Ok(w) => tracing::info!(app_dir = ?resource_dir, worker = %w.program.display(), args = w.args.len(), "outlook worker resolved"),
+                Err(e) => tracing::warn!(app_dir = ?resource_dir, error = %e, "outlook worker not found"),
+            }
             let close_to_tray = settings.close_to_tray;
             app.manage(AppState {
                 db: Mutex::new(conn),
@@ -125,6 +133,7 @@ pub fn run() {
                 dev_worker_dir,
                 sync: sync::SyncController::default(),
                 startup_ms: AtomicU64::new(0),
+                completing: Mutex::new(Default::default()),
                 _log_guard: Mutex::new(guard),
             });
             if let Err(e) = setup_tray(app) {
@@ -157,6 +166,32 @@ pub fn run() {
             commands::ticket_create,
             commands::ticket_update,
             commands::ticket_set_field,
+            commands::ticket_set_issues,
+            commands::ticket_add_school,
+            commands::ticket_remove_school,
+            commands::ticket_reopen,
+            commands::ticket_complete,
+            commands::ticket_start_work,
+            commands::staff_list,
+            commands::staff_save,
+            commands::staff_set_active,
+            commands::staff_current_get,
+            commands::staff_current_set,
+            commands::outlook_list_accounts,
+            commands::assign_preview,
+            commands::tickets_assign,
+            commands::assignment_retry,
+            commands::notification_retry,
+            commands::notification_check,
+            commands::notification_resend,
+            commands::scope_status,
+            commands::overview_get,
+            commands::prompt_get,
+            commands::prompt_default_instructions,
+            commands::prompt_copied,
+            commands::outlook_open_reply,
+            commands::outlook_open_new,
+            commands::outlook_validate_folder,
             commands::message_refresh,
             commands::templates_list,
             commands::template_get,

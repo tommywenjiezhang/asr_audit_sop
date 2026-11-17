@@ -6,18 +6,13 @@
   import Tickets from "./pages/Tickets.svelte";
   import Templates from "./pages/Templates.svelte";
   import Reports from "./pages/Reports.svelte";
+  import Overview from "./pages/Overview.svelte";
   import SettingsPage from "./pages/Settings.svelte";
 
-  type Page = "tickets" | "templates" | "reports" | "settings";
+  type Page = "tickets" | "overview" | "templates" | "reports" | "settings";
   let page = $state<Page>("tickets");
-  let group = $state("open");
   let ready = $state(false);
   let loadError = $state("");
-
-  const groups: [string, string][] = [
-    ["all", "All Tickets"], ["open", "Open"], ["new", "New"], ["review", "Needs Review"],
-    ["progress", "In Progress"], ["waiting", "Waiting"], ["done", "Resolved / Closed"],
-  ];
 
   onMount(() => {
     const unsubs: (() => void)[] = [];
@@ -53,12 +48,8 @@
   <nav class="side">
     <div class="brand">ASR/Audit<br /><span>Support Desk</span></div>
     <button class="nav" class:active={page === "tickets"} onclick={() => (page = "tickets")}>Tickets</button>
-    {#if page === "tickets"}
-      {#each groups as [g, label]}
-        <button class="sub" class:active={group === g} onclick={() => (group = g)}>{label}</button>
-      {/each}
-    {/if}
-    <button class="nav" class:active={page === "templates"} onclick={() => (page = "templates")}>Email Templates</button>
+    <button class="nav" class:active={page === "templates"} onclick={() => (page = "templates")} title="Approved SOP wording used in the Copilot prompt">SOP Templates</button>
+    <button class="nav" class:active={page === "overview"} onclick={() => (page = "overview")}>Team Overview</button>
     <button class="nav" class:active={page === "reports"} onclick={() => (page = "reports")}>Reports</button>
     <button class="nav" class:active={page === "settings"} onclick={() => (page = "settings")}>Settings</button>
     <div class="grow"></div>
@@ -79,9 +70,11 @@
     {:else if !ready}
       <div class="muted" style="padding:16px">Loading…</div>
     {:else if page === "tickets"}
-      <Tickets {group} />
+      <Tickets />
     {:else if page === "templates"}
       <Templates />
+    {:else if page === "overview"}
+      <Overview />
     {:else if page === "reports"}
       <Reports />
     {:else}
@@ -101,7 +94,6 @@
   .brand span { font-weight: 400; font-size: 13px; color: #a9c1d9; }
   .side button { background: none; border: none; color: inherit; text-align: left; height: 30px; border-radius: 5px; }
   .side button.nav { font-weight: 600; }
-  .side button.sub { padding-left: 22px; height: 26px; font-size: 12px; color: #b8cadc; }
   .side button.active { background: #2b5279; color: #fff; }
   .side button:hover { background: #24476b; }
   .side button.primary { background: #3a77b5; color: #fff; text-align: center; }

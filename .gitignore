@@ -1,6 +1,8 @@
 # ---- Node / frontend ----
 node_modules/
+# dist/ = release packages (portable ZIP + .sha256); dist-web/ = Vite frontend build embedded in the app
 dist/
+dist-web/
 .vite/
 *.local
 .env
@@ -38,6 +40,13 @@ outlook_worker/dist/
 settings.json
 logs/
 backups/
+
+# ---- Docker build output (installer copied back from the container) ----
+installer/
+
+# ---- User guide build cache (sources, images and the final HTML are kept) ----
+docs/guide/_output/
+docs/guide/.quarto/
 
 # ---- Logs / temp ----
 *.log

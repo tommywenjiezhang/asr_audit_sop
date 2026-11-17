@@ -1,4 +1,4 @@
-# =====================================================================================
+﻿# =====================================================================================
 # demo.ps1 - Build the ASR/Audit Support Desk yourself, one step at a time.
 #
 # HOW TO USE
@@ -83,7 +83,7 @@ if ($LASTEXITCODE -ne 0) { throw "Python worker tests failed" }
 npx svelte-check --tsconfig ./tsconfig.json
 if ($LASTEXITCODE -ne 0) { throw "Frontend type check failed" }
 
-# Vite bundles the UI into the dist\ folder, which gets packed into the app.
+# Vite bundles the UI into the dist-web\ folder, which gets packed into the app.
 npm run build
 if ($LASTEXITCODE -ne 0) { throw "Frontend build failed" }
 

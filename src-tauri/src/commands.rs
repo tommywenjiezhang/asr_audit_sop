@@ -1,6 +1,7 @@
 //! Tauri command handlers (thin wrappers; logic lives in the domain modules).
 
 use crate::catalog::{catalog, Catalog};
+use crate::completion;
 use crate::drafts::{self, Draft, DraftCheck, Proposal};
 use crate::error::{AppError, AppResult};
 use crate::export;
@@ -78,13 +79,216 @@ pub async fn message_refresh(state: State<'_, AppState>, message_id: i64) -> App
         |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
     let cfg = sync::worker_config(&state)?;
-    let data = sync::call_with_retry(&cfg, "get_message", serde_json::json!({"entry_id": entry, "store_id": store}), Duration::from_secs(60), 2).await?;
+    let data = sync::call_with_retry(&cfg, "get_message", serde_json::json!({"entry_id": entry, "store_id": store, "body_max_chars": 10_000_000}), Duration::from_secs(60), 2).await?;
     let body = data.get("body").and_then(|b| b.as_str()).unwrap_or("").to_string();
-    state.db.lock().unwrap().execute(
-        "UPDATE email_messages SET body_text=?2, body_truncated=0 WHERE id=?1",
-        rusqlite::params![message_id, body],
-    )?;
+    let conn = state.db.lock().unwrap();
+    conn.execute("UPDATE email_messages SET body_text=?2, body_truncated=0 WHERE id=?1", rusqlite::params![message_id, body])?;
+    let tids: Vec<i64> = {
+        let mut st = conn.prepare("SELECT ticket_id FROM ticket_email_links WHERE message_id=?1")?;
+        let v = st.query_map([message_id], |r| r.get(0))?.collect::<Result<_, _>>()?;
+        v
+    };
+    for t in tids {
+        crate::search::reindex(&conn, t)?;
+    }
     Ok(body)
+}
+
+#[tauri::command]
+pub async fn ticket_set_issues(state: State<'_, AppState>, id: i64, issues: Vec<String>) -> AppResult<Vec<tickets::IssueRow>> {
+    let a = actor(&state);
+    tickets::set_issues(&state.db.lock().unwrap(), id, &issues, &a)
+}
+
+#[tauri::command]
+pub async fn ticket_add_school(state: State<'_, AppState>, id: i64) -> AppResult<i64> {
+    let a = actor(&state);
+    tickets::add_school(&state.db.lock().unwrap(), id, &a)
+}
+
+#[tauri::command]
+pub async fn ticket_remove_school(state: State<'_, AppState>, id: i64, slot: i64) -> AppResult<()> {
+    let a = actor(&state);
+    tickets::remove_school(&state.db.lock().unwrap(), id, slot, &a)
+}
+
+/// Reopen a Done ticket (local status only; the archived email is not moved back or unflagged).
+#[tauri::command]
+pub async fn ticket_reopen(state: State<'_, AppState>, id: i64) -> AppResult<tickets::Ticket> {
+    let a = actor(&state);
+    tickets::update(&state.db.lock().unwrap(), id, &TicketPatch { status: Some(tickets::IN_PROGRESS.into()), ..Default::default() }, &a)
+}
+
+// ------------------------------------------------------------------ Copilot prompt
+
+/// The prompt text exactly as it will be copied (built from saved data; works without Outlook).
+#[tauri::command]
+pub async fn prompt_get(state: State<'_, AppState>, id: i64) -> AppResult<String> {
+    let s = settings(&state);
+    crate::prompt::build_prompt(&state.db.lock().unwrap(), id, &s)
+}
+
+/// Default general instructions (Settings › Restore Default).
+#[tauri::command]
+pub async fn prompt_default_instructions() -> AppResult<String> {
+    Ok(crate::settings::DEFAULT_PROMPT_INSTRUCTIONS.to_string())
+}
+
+/// Called after the UI put the prompt on the clipboard: stores the copied text and time.
+#[tauri::command]
+pub async fn prompt_copied(state: State<'_, AppState>, id: i64, text: String) -> AppResult<String> {
+    let a = actor(&state);
+    tickets::record_prompt(&state.db.lock().unwrap(), id, &text, &a)
+}
+
+// ------------------------------------------------------------------ Outlook reply window
+
+/// Folders where a message may be found again by Internet Message-ID if its EntryID changed
+/// (staff often file emails into other subfolders): its last folder, the completion folder, the monitored
+/// folders, every staff folder and the whole tree under the top folder. Lookup only - no tickets.
+fn candidate_folders(state: &AppState, s: &Settings, own_store: &str, own_folder: &str) -> Vec<serde_json::Value> {
+    let staff = crate::staff::list(&state.db.lock().unwrap(), true).unwrap_or_default();
+    sync::candidate_folders(s, &staff, own_store, own_folder)
+}
+
+#[derive(Serialize)]
+pub struct OpenReplyResult {
+    pub opened: bool,
+    pub reply_all: bool,
+    pub message_id: i64,
+    pub relocated: bool,
+}
+
+/// Open classic Outlook's Reply / Reply All window for the ticket's source email (default: the latest
+/// incoming email). Nothing is inserted, saved or sent, and the ticket status does not change.
+#[tauri::command]
+pub async fn outlook_open_reply(state: State<'_, AppState>, ticket_id: i64, message_id: Option<i64>, reply_all: bool) -> AppResult<OpenReplyResult> {
+    use rusqlite::OptionalExtension;
+    let s = settings(&state);
+    let src: Option<(i64, String, String, String, String)> = {
+        let conn = state.db.lock().unwrap();
+        tickets::get(&conn, ticket_id)?;
+        let sql = "SELECT m.id, COALESCE(m.entry_id,''), COALESCE(m.store_id,''), COALESCE(m.internet_message_id,''), COALESCE(m.folder_entry_id,'')
+                   FROM ticket_email_links l JOIN email_messages m ON m.id=l.message_id
+                   WHERE l.ticket_id=?1 AND COALESCE(m.entry_id,'')<>'' AND (?2 IS NULL AND l.link_type IN ('original','reply') AND m.is_internal=0 OR m.id=?2)
+                   ORDER BY m.received_at DESC, m.id DESC LIMIT 1";
+        conn.query_row(sql, rusqlite::params![ticket_id, message_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))).optional()?
+    };
+    let Some((mid, entry, store, imid, folder)) = src else {
+        return Err(AppError::coded("NO_SOURCE_EMAIL", "No Outlook email is linked to this ticket."));
+    };
+    let cfg = sync::worker_config(&state)?;
+    let params = serde_json::json!({"entry_id": entry, "store_id": store, "imid": imid, "folders": candidate_folders(&state, &s, &store, &folder), "reply_all": reply_all});
+    // no retries: a retry could open a second window
+    let data = sync::call_with_retry(&cfg, "open_reply", params, Duration::from_secs(60), 1).await?;
+    let relocated = data.get("relocated").and_then(|v| v.as_bool()).unwrap_or(false);
+    let conn = state.db.lock().unwrap();
+    if relocated {
+        if let Some(src) = data.get("source") {
+            let g = |k: &str| src.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
+            if !g("entry_id").is_empty() {
+                conn.execute(
+                    "UPDATE email_messages SET entry_id=?2, store_id=COALESCE(NULLIF(?3,''),store_id), folder_entry_id=COALESCE(NULLIF(?4,''),folder_entry_id), folder_path=COALESCE(NULLIF(?5,''),folder_path) WHERE id=?1",
+                    rusqlite::params![mid, g("entry_id"), g("store_id"), g("folder_entry_id"), g("folder_path")],
+                )?;
+            }
+        }
+    }
+    tickets::history(&conn, ticket_id, &actor(&state), if reply_all { "Opened Outlook Reply All window" } else { "Opened Outlook reply window" }, None, None, None)?;
+    Ok(OpenReplyResult { opened: true, reply_all, message_id: mid, relocated })
+}
+
+/// Explicit fallback when the source email cannot be found: a new, unthreaded message to the sender.
+#[tauri::command]
+pub async fn outlook_open_new(state: State<'_, AppState>, ticket_id: i64) -> AppResult<()> {
+    let t = tickets::get(&state.db.lock().unwrap(), ticket_id)?;
+    let to = t.sender_email.clone().unwrap_or_default();
+    if to.trim().is_empty() {
+        return Err(AppError::coded("NO_RECIPIENT", "This ticket has no sender email address. Add it under Sender first."));
+    }
+    let subj = t.original_subject.clone().unwrap_or_default();
+    let subject = if subj.to_lowercase().starts_with("re:") { subj } else { format!("RE: {subj}") };
+    let cfg = sync::worker_config(&state)?;
+    sync::call_with_retry(&cfg, "open_new_message", serde_json::json!({"to": to, "subject": subject}), Duration::from_secs(60), 1).await?;
+    tickets::history(&state.db.lock().unwrap(), ticket_id, &actor(&state), "Opened new (unthreaded) Outlook message to sender", None, None, Some(&to))?;
+    Ok(())
+}
+
+// ------------------------------------------------------------------ Mark Done
+
+/// Prevents two conflicting Outlook operations (Mark Done / assignment) on the same ticket at the same time.
+struct BusyGuard<'a> {
+    set: &'a std::sync::Mutex<std::collections::HashSet<i64>>,
+    id: i64,
+}
+impl Drop for BusyGuard<'_> {
+    fn drop(&mut self) {
+        self.set.lock().unwrap().remove(&self.id);
+    }
+}
+fn busy<'a>(set: &'a std::sync::Mutex<std::collections::HashSet<i64>>, id: i64) -> AppResult<BusyGuard<'a>> {
+    if !set.lock().unwrap().insert(id) {
+        return Err(AppError::coded("BUSY", format!("{} is busy: an assignment or Mark Done is already running for it.", tickets::display_id(id))));
+    }
+    Ok(BusyGuard { set, id })
+}
+
+/// Mark Done: flag the ticket's incoming emails complete and move them to the completion folder, then
+/// set the ticket Done. Partial failures keep the ticket In Progress; calling again retries only what is left.
+#[tauri::command]
+pub async fn ticket_complete(state: State<'_, AppState>, id: i64) -> AppResult<completion::Outcome> {
+    let _guard = busy(&state.completing, id)?;
+    let s = settings(&state);
+    let a = actor(&state);
+    let items = {
+        let conn = state.db.lock().unwrap();
+        let t = tickets::get(&conn, id)?;
+        if t.status == tickets::DONE {
+            return Ok(completion::Outcome { done: true, flagged: 0, moved: 0, failed: vec![], dest_path: String::new() });
+        }
+        let items = completion::pending(&conn, id)?;
+        if items.is_empty() {
+            return completion::finish_without_outlook(&conn, id, &a);
+        }
+        items
+    };
+    let dest = s.archive_folder.clone().ok_or_else(|| {
+        AppError::coded("NOT_CONFIGURED", "Choose a completion folder in Settings › Completion Folder before marking tickets Done. The app never guesses where to archive emails.")
+    })?;
+    completion::begin_attempt(&state.db.lock().unwrap(), id, &items)?;
+    let req_items: Vec<serde_json::Value> = items
+        .iter()
+        .map(|i| {
+            serde_json::json!({
+                "message_id": i.message_id, "entry_id": i.entry_id, "store_id": i.store_id, "imid": i.internet_message_id,
+                "folders": candidate_folders(&state, &s, &i.store_id, &i.folder_entry_id), "need_flag": i.need_flag, "need_move": i.need_move,
+            })
+        })
+        .collect();
+    let cfg = sync::worker_config(&state)?;
+    let params = serde_json::json!({"dest": {"store_id": dest.store_id, "entry_id": dest.entry_id}, "items": req_items});
+    // no automatic retries: results must be recorded before anything is attempted again
+    let res = crate::outlook::call(&cfg, "complete_messages", params, Duration::from_secs(180)).await.and_then(crate::outlook::into_result);
+    let conn = state.db.lock().unwrap();
+    match res {
+        Ok(data) => {
+            let results: Vec<completion::ItemResult> = serde_json::from_value(data.get("items").cloned().unwrap_or_default())?;
+            let o = completion::apply_results(&conn, id, &dest, &items, &results, &a)?;
+            tracing::info!(ticket = id, done = o.done, failed = o.failed.len(), "mark done finished");
+            Ok(o)
+        }
+        Err(e) => {
+            completion::record_failure(&conn, id, &items, &e.to_string(), &a)?;
+            Err(e)
+        }
+    }
+}
+
+/// Check that a folder exists and is a mail folder (used for the completion folder in Settings).
+#[tauri::command]
+pub async fn outlook_validate_folder(state: State<'_, AppState>, store_id: String, entry_id: String) -> AppResult<serde_json::Value> {
+    let cfg = sync::worker_config(&state)?;
+    sync::call_with_retry(&cfg, "validate_folder", serde_json::json!({"store_id": store_id, "entry_id": entry_id}), Duration::from_secs(60), 1).await
 }
 
 // ------------------------------------------------------------------ templates
@@ -296,12 +500,13 @@ pub async fn outlook_list_mailboxes(state: State<'_, AppState>) -> AppResult<ser
 }
 
 #[tauri::command]
-pub async fn outlook_list_folders(state: State<'_, AppState>, store_id: Option<String>, shared_mailbox: Option<String>) -> AppResult<serde_json::Value> {
+pub async fn outlook_list_folders(state: State<'_, AppState>, store_id: Option<String>, shared_mailbox: Option<String>, root_entry_id: Option<String>) -> AppResult<serde_json::Value> {
     let cfg = sync::worker_config(&state)?;
     sync::call_with_retry(
         &cfg,
         "list_folders",
-        serde_json::json!({"store_id": store_id.unwrap_or_default(), "shared_mailbox": shared_mailbox.unwrap_or_default(), "max_depth": 6}),
+        serde_json::json!({"store_id": store_id.unwrap_or_default(), "shared_mailbox": shared_mailbox.unwrap_or_default(),
+            "root_entry_id": root_entry_id.unwrap_or_default(), "max_depth": 6}),
         Duration::from_secs(120),
         1,
     )
@@ -324,7 +529,10 @@ pub async fn sync_status(state: State<'_, AppState>) -> AppResult<SyncStatus> {
             .unwrap()
             .query_row("SELECT MAX(last_success_at) FROM sync_state", [], |r| r.get::<_, Option<String>>(0))?;
     }
-    s.folder_display = state.settings.read().unwrap().folder.as_ref().map(|f| f.path.clone());
+    s.folder_display = {
+        let st = state.settings.read().unwrap();
+        st.folder.as_ref().map(|_| st.scan_summary())
+    };
     Ok(s)
 }
 
@@ -337,8 +545,19 @@ pub async fn settings_get(state: State<'_, AppState>) -> AppResult<Settings> {
 
 #[tauri::command]
 pub async fn settings_save(app: AppHandle, state: State<'_, AppState>, settings: Settings) -> AppResult<Settings> {
+    let settings = settings.normalized();
     settings.validate()?;
     let old = self::settings(&state);
+    // a newly chosen completion folder must exist and be a mail folder
+    if let Some(a) = settings.archive_folder.as_ref().filter(|a| old.archive_folder.as_ref() != Some(*a)) {
+        let cfg = sync::worker_config(&state)?;
+        let r = sync::call_with_retry(&cfg, "validate_folder", serde_json::json!({"store_id": a.store_id, "entry_id": a.entry_id}), Duration::from_secs(60), 1).await;
+        match r {
+            Ok(_) => {}
+            Err(e) if ["FOLDER_NOT_FOUND", "NOT_MAIL_FOLDER"].contains(&e.code()) => return Err(e),
+            Err(e) => tracing::warn!(error = %e, "completion folder could not be validated now (Outlook unavailable?)"),
+        }
+    }
     settings.save(&state.settings_path)?;
     *state.settings.write().unwrap() = settings.clone();
     if old.launch_at_login != settings.launch_at_login {
@@ -348,6 +567,18 @@ pub async fn settings_save(app: AppHandle, state: State<'_, AppState>, settings:
         if let Err(e) = r {
             tracing::warn!(error = %e, "could not change launch-at-login");
         }
+    }
+    // a different folder selection: confirmed memberships become "awaiting verification", then re-check
+    let new_key = crate::scope::cfg(&settings).key;
+    if crate::scope::cfg(&old).key != new_key && settings.folder.is_some() {
+        let n = crate::scope::invalidate_for_new_scope(&state.db.lock().unwrap(), &new_key)?;
+        tracing::info!(emails = n, "folder selection changed; membership will be re-verified");
+        let app2 = app.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Err(e) = sync::run_once(&app2, "scope-change").await {
+                tracing::warn!(error = %e, "check after folder change failed");
+            }
+        });
     }
     state.sync.wake.notify_one();
     tracing::info!(interval = settings.interval_minutes, enabled = settings.sync_enabled, "settings saved");
@@ -362,8 +593,8 @@ pub async fn report_get(state: State<'_, AppState>) -> AppResult<export::Report>
 }
 
 #[tauri::command]
-pub async fn export_csv(state: State<'_, AppState>, path: String, group: Option<String>) -> AppResult<usize> {
-    export::export_csv(&state.db.lock().unwrap(), &PathBuf::from(path), group.as_deref().unwrap_or("all"))
+pub async fn export_csv(state: State<'_, AppState>, path: String, status: Option<String>) -> AppResult<usize> {
+    export::export_csv(&state.db.lock().unwrap(), &PathBuf::from(path), status.as_deref().unwrap_or(""))
 }
 
 #[tauri::command]
@@ -398,10 +629,17 @@ pub struct AppInfo {
     pub schema_version: i64,
     pub catalog_version: i64,
     pub template_count: i64,
+    /// Outlook worker the app will run (packaged exe next to the app, or Python fallback), or the error.
+    pub worker: String,
 }
 
 #[tauri::command]
 pub async fn app_info(app: AppHandle, state: State<'_, AppState>) -> AppResult<AppInfo> {
+    let worker = match sync::worker_config(&state) {
+        Ok(w) if w.args.is_empty() => w.program.display().to_string(),
+        Ok(w) => format!("{} {}", w.program.display(), w.args.join(" ")),
+        Err(e) => format!("not found: {e}"),
+    };
     let conn = state.db.lock().unwrap();
     Ok(AppInfo {
         version: app.package_info().version.to_string(),
@@ -412,5 +650,313 @@ pub async fn app_info(app: AppHandle, state: State<'_, AppState>) -> AppResult<A
         schema_version: crate::db::schema_version(&conn)?,
         catalog_version: catalog().catalog_version,
         template_count: conn.query_row("SELECT COUNT(*) FROM email_templates", [], |r| r.get(0))?,
+        worker,
     })
+}
+
+// ------------------------------------------------------------------ staff (Settings > Staff Assignment)
+
+#[tauri::command]
+pub async fn staff_list(state: State<'_, AppState>, include_inactive: bool) -> AppResult<Vec<crate::staff::Staff>> {
+    crate::staff::list(&state.db.lock().unwrap(), include_inactive)
+}
+
+#[tauri::command]
+pub async fn staff_save(state: State<'_, AppState>, input: crate::staff::StaffInput) -> AppResult<crate::staff::Staff> {
+    let conn = state.db.lock().unwrap();
+    let st = crate::staff::save(&conn, &input)?;
+    // ownership is inferred from staff folders: re-evaluate with the new mapping (no notifications)
+    crate::scope::recompute_all(&conn, "system")?;
+    Ok(st)
+}
+
+#[tauri::command]
+pub async fn staff_set_active(state: State<'_, AppState>, id: i64, active: bool) -> AppResult<crate::staff::Staff> {
+    crate::staff::set_active(&state.db.lock().unwrap(), id, active)
+}
+
+#[tauri::command]
+pub async fn staff_current_get(state: State<'_, AppState>) -> AppResult<Option<i64>> {
+    crate::staff::current_staff_id(&state.db.lock().unwrap())
+}
+
+#[tauri::command]
+pub async fn staff_current_set(state: State<'_, AppState>, id: Option<i64>) -> AppResult<()> {
+    crate::staff::set_current_staff_id(&state.db.lock().unwrap(), id)
+}
+
+#[tauri::command]
+pub async fn outlook_list_accounts(state: State<'_, AppState>) -> AppResult<serde_json::Value> {
+    let cfg = sync::worker_config(&state)?;
+    sync::call_with_retry(&cfg, "list_accounts", serde_json::json!({}), Duration::from_secs(60), 1).await
+}
+
+// ------------------------------------------------------------------ assignment
+
+#[tauri::command]
+pub async fn assign_preview(state: State<'_, AppState>, ticket_ids: Vec<i64>, staff_id: i64) -> AppResult<Vec<crate::assignment::AssignPreview>> {
+    let conn = state.db.lock().unwrap();
+    ticket_ids.iter().map(|id| crate::assignment::preview(&conn, *id, staff_id)).collect()
+}
+
+#[derive(Serialize, Clone)]
+pub struct AssignOutcome {
+    pub ticket_id: i64,
+    pub display_id: String,
+    /// "assigned" | "no_change" | "moves_failed" | "blocked" | "busy"
+    pub result: String,
+    pub message: String,
+    pub failures: Vec<crate::assignment::MoveFailure>,
+    pub op_id: Option<i64>,
+    /// "pending" | "submitted" | "failed" | "uncertain" | "skipped" | "none"
+    pub notify_state: String,
+    pub notify_error: Option<String>,
+}
+
+fn outcome(id: i64, result: &str, message: impl Into<String>) -> AssignOutcome {
+    AssignOutcome { ticket_id: id, display_id: tickets::display_id(id), result: result.into(), message: message.into(), failures: vec![], op_id: None, notify_state: "none".into(), notify_error: None }
+}
+
+/// Move the pending emails of an assignment; returns (finalized, failures).
+async fn run_moves(state: &AppState, op_id: i64) -> AppResult<(bool, Vec<crate::assignment::MoveFailure>)> {
+    use crate::assignment as a;
+    let (op, pending) = {
+        let conn = state.db.lock().unwrap();
+        (a::get_op(&conn, op_id)?, a::pending_moves(&conn, op_id)?)
+    };
+    if pending.is_empty() {
+        return Ok((a::finalize_if_complete(&state.db.lock().unwrap(), op_id)?, vec![]));
+    }
+    let s = settings(state);
+    a::record_attempt(&state.db.lock().unwrap(), op_id, &pending)?;
+    let items: Vec<serde_json::Value> = pending
+        .iter()
+        .map(|m| serde_json::json!({"message_id": m.message_id, "entry_id": m.entry_id, "store_id": m.store_id, "imid": m.imid,
+            "folders": candidate_folders(state, &s, &m.store_id, &m.folder_entry_id)}))
+        .collect();
+    let cfg = sync::worker_config(state)?;
+    let params = serde_json::json!({"dest": {"store_id": op.dest_store_id, "entry_id": op.dest_folder_entry_id}, "items": items});
+    // no automatic retries: results must be recorded before anything is attempted again
+    let res = crate::outlook::call(&cfg, "move_messages", params, Duration::from_secs(300)).await.and_then(crate::outlook::into_result);
+    let current = crate::scope::cfg(&settings(state));
+    let conn = state.db.lock().unwrap();
+    match res {
+        Ok(data) => {
+            let results: Vec<a::MoveResult> = serde_json::from_value(data.get("items").cloned().unwrap_or_default())?;
+            let failures = a::apply_moves(&conn, op_id, &current, &pending, &results)?;
+            Ok((a::get_op(&conn, op_id)?.state == "done", failures))
+        }
+        Err(e) => {
+            a::record_worker_failure(&conn, op_id, &pending, &e.to_string())?;
+            Ok((false, pending.iter().map(|m| a::MoveFailure { message_id: m.message_id, subject: m.subject.clone(), error: e.to_string() }).collect()))
+        }
+    }
+}
+
+/// Send the handoff notification of a finished assignment (claimed atomically: never twice).
+async fn send_notice(state: &AppState, op_id: i64) -> AppResult<(String, Option<String>)> {
+    use crate::assignment::{self as a, NotifyOutcome};
+    let n = {
+        let conn = state.db.lock().unwrap();
+        a::claim_notification(&conn, op_id)?;
+        a::build_notification(&conn, op_id)?
+    };
+    let account = settings(state).notify_account;
+    let params = serde_json::json!({"to": n.to, "subject": n.subject, "html_body": n.html_body, "account": account, "notification_id": n.notification_id});
+    let outcome = match sync::worker_config(state) {
+        Err(e) => NotifyOutcome::Failed(e.to_string()),
+        Ok(cfg) => match crate::outlook::call(&cfg, "send_notification", params, Duration::from_secs(120)).await {
+            Ok(resp) if resp.ok => NotifyOutcome::Submitted {
+                entry_id: resp.data.get("draft_entry_id").and_then(|v| v.as_str()).map(String::from),
+                account: resp.data.get("account").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            },
+            Ok(resp) => {
+                let msg = resp.message.clone().unwrap_or_else(|| "Outlook could not send the notification.".into());
+                let stage = resp.diagnostics.get("stage").and_then(|v| v.as_str()).unwrap_or("");
+                if resp.error_code.as_deref() == Some("SEND_UNCERTAIN") || stage == "send" { NotifyOutcome::Uncertain(msg) } else { NotifyOutcome::Failed(msg) }
+            }
+            // the worker never started: certainly not sent. Anything else (timeout, crash) may have happened after Send().
+            Err(e) if e.code() == "WORKER_START_FAILED" => NotifyOutcome::Failed(e.to_string()),
+            Err(e) => NotifyOutcome::Uncertain(format!("{e} The notification may or may not have been sent.")),
+        },
+    };
+    let conn = state.db.lock().unwrap();
+    a::record_notification(&conn, op_id, outcome)?;
+    let op = a::get_op(&conn, op_id)?;
+    Ok((op.notify_state, op.notify_error))
+}
+
+async fn run_assignment(state: &AppState, ticket_id: i64, staff_id: i64, note: &str) -> AssignOutcome {
+    use crate::assignment::{self as a, Begin};
+    let _g = match busy(&state.completing, ticket_id) {
+        Ok(g) => g,
+        Err(e) => return outcome(ticket_id, "busy", e.to_string()),
+    };
+    let operator = actor(state);
+    let begin = a::begin(&state.db.lock().unwrap(), ticket_id, staff_id, &operator, note);
+    let op_id = match begin {
+        Err(e) => return outcome(ticket_id, "blocked", e.to_string()),
+        Ok(Begin::NoChange) => return outcome(ticket_id, "no_change", "Already assigned to this person and the emails are already in their folder. No notification sent."),
+        Ok(Begin::Op(op)) => op,
+    };
+    finish_assignment(state, ticket_id, op_id).await
+}
+
+async fn finish_assignment(state: &AppState, ticket_id: i64, op_id: i64) -> AssignOutcome {
+    let mut o = outcome(ticket_id, "moves_failed", "");
+    o.op_id = Some(op_id);
+    match run_moves(state, op_id).await {
+        Err(e) => {
+            o.message = e.to_string();
+            return o;
+        }
+        Ok((false, failures)) => {
+            o.message = "Not all emails could be moved. The assignment is not finished and no notification was sent. Fix the problem and choose Retry.".into();
+            o.failures = failures;
+            return o;
+        }
+        Ok((true, _)) => {}
+    }
+    o.result = "assigned".into();
+    let op = match crate::assignment::get_op(&state.db.lock().unwrap(), op_id) {
+        Ok(op) => op,
+        Err(e) => {
+            o.message = e.to_string();
+            return o;
+        }
+    };
+    if op.notify_state == "pending" || op.notify_state == "failed" {
+        match send_notice(state, op_id).await {
+            Ok((st, err)) => {
+                o.notify_state = st;
+                o.notify_error = err;
+            }
+            Err(e) => {
+                o.notify_state = "failed".into();
+                o.notify_error = Some(e.to_string());
+            }
+        }
+    } else {
+        o.notify_state = op.notify_state.clone();
+        o.notify_error = op.notify_error.clone();
+    }
+    o.message = match o.notify_state.as_str() {
+        "submitted" => format!("Assigned to {}. Notification submitted to Outlook (delivery not confirmed).", op.to_name.unwrap_or_default()),
+        "skipped" => "Emails moved; same person, so no notification.".into(),
+        "uncertain" => "Assigned. The notification outcome is uncertain - check Sent Items before resending.".into(),
+        _ => "Assigned — notification failed. Use Retry Notification.".into(),
+    };
+    o
+}
+
+/// Assign one or several tickets to one staff member. Each ticket is handled (and reported) independently.
+#[tauri::command]
+pub async fn tickets_assign(app: AppHandle, state: State<'_, AppState>, ticket_ids: Vec<i64>, staff_id: i64, note: Option<String>) -> AppResult<Vec<AssignOutcome>> {
+    let note = note.unwrap_or_default();
+    let mut out = Vec::new();
+    for id in ticket_ids {
+        out.push(run_assignment(&state, id, staff_id, &note).await);
+    }
+    use tauri::Emitter;
+    let _ = app.emit("tickets-changed", ());
+    Ok(out)
+}
+
+/// Retry the newest unfinished assignment of a ticket: remaining moves first, then the notification.
+#[tauri::command]
+pub async fn assignment_retry(state: State<'_, AppState>, ticket_id: i64) -> AppResult<AssignOutcome> {
+    let _g = busy(&state.completing, ticket_id)?;
+    let op = crate::assignment::latest_op(&state.db.lock().unwrap(), ticket_id)?.ok_or_else(|| AppError::coded("NOT_FOUND", "No assignment to retry."))?;
+    if op.state == "done" && !(op.notify_state == "failed" || op.notify_state == "pending") {
+        return Err(AppError::coded("NOTHING_TO_RETRY", "This assignment is finished; there is nothing to retry."));
+    }
+    Ok(finish_assignment(&state, ticket_id, op.id).await)
+}
+
+/// Retry only the notification (emails are not moved again).
+#[tauri::command]
+pub async fn notification_retry(state: State<'_, AppState>, op_id: i64) -> AppResult<(String, Option<String>)> {
+    let tid = crate::assignment::get_op(&state.db.lock().unwrap(), op_id)?.ticket_id;
+    let _g = busy(&state.completing, tid)?;
+    send_notice(&state, op_id).await
+}
+
+/// Uncertain outcome: look for the notification in Sent Items / Outbox of the sending account.
+#[tauri::command]
+pub async fn notification_check(state: State<'_, AppState>, op_id: i64) -> AppResult<String> {
+    let op = crate::assignment::get_op(&state.db.lock().unwrap(), op_id)?;
+    let cfg = sync::worker_config(&state)?;
+    let account = op.notify_account.clone().filter(|a| !a.is_empty()).unwrap_or_else(|| settings(&state).notify_account);
+    let data = sync::call_with_retry(&cfg, "find_notification", serde_json::json!({"notification_id": op.notify_id, "account": account}), Duration::from_secs(60), 1).await?;
+    let found = data.get("found").and_then(|v| v.as_bool()).unwrap_or(false);
+    let place = data.get("where").and_then(|v| v.as_str()).map(String::from);
+    let entry = data.get("entry_id").and_then(|v| v.as_str()).map(String::from);
+    crate::assignment::record_check(&state.db.lock().unwrap(), op_id, if found { place.as_deref() } else { None }, entry.as_deref())
+}
+
+/// Uncertain outcome: staff explicitly confirm to send again.
+#[tauri::command]
+pub async fn notification_resend(state: State<'_, AppState>, op_id: i64) -> AppResult<(String, Option<String>)> {
+    let tid = crate::assignment::get_op(&state.db.lock().unwrap(), op_id)?.ticket_id;
+    let _g = busy(&state.completing, tid)?;
+    crate::assignment::allow_resend(&state.db.lock().unwrap(), op_id, &actor(&state))?;
+    send_notice(&state, op_id).await
+}
+
+#[tauri::command]
+pub async fn ticket_start_work(state: State<'_, AppState>, id: i64) -> AppResult<tickets::Ticket> {
+    let a = actor(&state);
+    tickets::start_work(&state.db.lock().unwrap(), id, &a)
+}
+
+// ------------------------------------------------------------------ scope status / overview
+
+#[derive(Serialize)]
+pub struct ScopeStatus {
+    pub configured: bool,
+    pub mailbox: String,
+    pub summary: String,
+    pub last_ok_at: Option<String>,
+    pub last_attempt_at: Option<String>,
+    pub last_error: Option<String>,
+    /// the last successful check was made for another folder selection, or is older than 3 check intervals
+    pub stale: bool,
+    pub running: bool,
+    pub current: i64,
+    pub history: i64,
+    pub unverified: i64,
+}
+
+#[tauri::command]
+pub async fn scope_status(state: State<'_, AppState>) -> AppResult<ScopeStatus> {
+    use crate::db::get_setting;
+    let s = settings(&state);
+    let conn = state.db.lock().unwrap();
+    let (current, history, unverified) = crate::scope::counts(&conn)?;
+    let last_ok = get_setting(&conn, "scope_last_ok_at")?.filter(|v| !v.is_empty());
+    let key_ok = get_setting(&conn, "scope_last_key")?.unwrap_or_default() == crate::scope::cfg(&s).key;
+    let old = last_ok
+        .as_deref()
+        .and_then(|v| chrono::DateTime::parse_from_rfc3339(v).ok())
+        .map(|t| chrono::Utc::now() - t.with_timezone(&chrono::Utc) > chrono::Duration::minutes(3 * s.interval_minutes.max(5) as i64))
+        .unwrap_or(true);
+    Ok(ScopeStatus {
+        configured: s.folder.is_some(),
+        mailbox: s.mailbox_name.clone(),
+        summary: if s.folder.is_some() { s.scan_summary() } else { "No folder selected".into() },
+        stale: !key_ok || old,
+        last_ok_at: last_ok,
+        last_attempt_at: get_setting(&conn, "scope_last_attempt_at")?,
+        last_error: get_setting(&conn, "scope_last_error")?.filter(|v| !v.is_empty()),
+        running: state.sync.is_running(),
+        current,
+        history,
+        unverified,
+    })
+}
+
+#[tauri::command]
+pub async fn overview_get(state: State<'_, AppState>, done_from: Option<String>, done_to: Option<String>) -> AppResult<crate::overview::Overview> {
+    let s = settings(&state);
+    crate::overview::overview(&state.db.lock().unwrap(), &s, &done_from.unwrap_or_default(), &done_to.unwrap_or_default())
 }

@@ -35,7 +35,7 @@ Source: `SOP for ASR-Audit Problems.docx` (all sections, links and figures revie
 
 ## SOP content that is not an email
 
-- **SOP FOR ANSWERING EMAILS (p.1):** workflow rules such as "close the loop", "mark complete" and "move to Completed". The app never moves or flags mail, so staff still do these steps by hand.
+- **SOP FOR ANSWERING EMAILS (p.1):** workflow rules such as "close the loop", "mark complete" and "move to Completed". The app now does "mark complete" and "move to Completed" when staff click **Mark Done**: the ticket's incoming emails are flagged complete and moved to the completion folder chosen in Settings. Scanning never changes mail. Templates are used as SOP excerpts in the Copilot prompt.
 - **STEPS FOR ADMIN STAFF TO CHECK FOR DATA SUBMISSION (p.16):** stored as `internal_steps` on the submission issue types. They are shown to staff only and never put in emails.
 
 ## Notes for review

@@ -9,11 +9,24 @@ Request:  {"op": "<operation>", "params": {...}}
 Response: {"ok": bool, "data": {...}, "error_code": str|None,
            "message": str|None, "diagnostics": {...}}
 
-Operations: test_connection, list_mailboxes, list_folders, sync_messages,
-            get_message, create_reply_draft
+Operations: test_connection, list_mailboxes, list_folders, validate_folder,
+            sync_messages, get_message, scope_inventory, locate_messages,
+            open_reply, open_new_message, complete_messages, move_messages,
+            list_accounts, send_notification, find_notification,
+            create_reply_draft (legacy, unused by the UI)
 
 Safety rules enforced here:
-  * never sends, deletes, moves, marks read or archives any item
+  * never deletes any item and never changes the read state
+  * scanning and verification (sync_messages, get_message, scope_inventory,
+    locate_messages, find_notification) only read
+  * open_reply / open_new_message only display a window; staff send replies to
+    schools manually
+  * moves happen ONLY in complete_messages (Mark Done: flag complete + move to
+    the completion folder) and move_messages (assignment: move to the staff
+    member's folder, no flag change)
+  * the ONLY automatic send is send_notification: one assignment handoff email
+    to one staff address, marked with an X-ASR-Desk-Notification header so it is
+    never imported as a ticket
   * never logs message bodies (diagnostics contain counts/codes only)
 """
 
@@ -39,6 +52,17 @@ PR_ATTACH_CONTENT_ID = "http://schemas.microsoft.com/mapi/proptag/0x3712001F"
 PR_ATTACHMENT_HIDDEN = "http://schemas.microsoft.com/mapi/proptag/0x7FFE000B"
 PR_SMTP_ADDRESS = "http://schemas.microsoft.com/mapi/proptag/0x39FE001F"
 CO_E_SERVER_EXEC_FAILURE = 0x80080005  # COM call across elevation levels (elevated app vs. normal Outlook)
+OL_MARK_COMPLETE = 5          # OlMarkInterval.olMarkComplete
+OL_FLAG_COMPLETE = 1          # OlFlagStatus.olFlagComplete
+OL_FOLDER_OUTBOX = 4
+OL_FOLDER_SENT = 5
+PR_TRANSPORT_HEADERS = "http://schemas.microsoft.com/mapi/proptag/0x007D001F"
+# Internet header on assignment notifications sent by this app (named property in the PS_INTERNET_HEADERS set,
+# so it is transmitted as "X-ASR-Desk-Notification: <id>"). Recognized notifications are never imported.
+NOTIFY_HEADER = "X-ASR-Desk-Notification"
+NOTIFY_PROP = "http://schemas.microsoft.com/mapi/string/{00020386-0000-0000-C000-000000000046}/" + NOTIFY_HEADER
+NOTIFY_BODY_RE = re.compile(r"\[ASR-Desk-Notification:\s*([^\]\s]+)\]")
+SEND_USING_ACCOUNT_DISPID = 64209  # MailItem.SendUsingAccount (pywin32 needs Invoke to set it)
 
 
 class WorkerError(Exception):
@@ -117,8 +141,41 @@ def folder_path(folder) -> str:
     return "/".join(reversed(parts))
 
 
-def message_dict(item, folder, store_id: str, body_max: int) -> dict:
+def folder_ancestors(folder) -> list:
+    """EntryIDs of the folder's parents (parent first, up to the store root)."""
+    ids = []
+    f = folder
+    for _ in range(25):
+        parent = safe(f, "Parent")
+        if parent is None or safe(parent, "Class", 0) != 2:  # 2 = olFolder
+            break
+        ids.append(safe(parent, "EntryID", ""))
+        f = parent
+    return ids
+
+
+def notification_id(item, body: str) -> str:
+    """Id of an assignment notification sent by this app ('' for normal mail): header, then body marker."""
+    try:
+        v = item.PropertyAccessor.GetProperty(NOTIFY_PROP)
+        if v:
+            return str(v)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        headers = item.PropertyAccessor.GetProperty(PR_TRANSPORT_HEADERS) or ""
+        m = re.search(r"^" + NOTIFY_HEADER + r":\s*(\S+)", headers, re.IGNORECASE | re.MULTILINE)
+        if m:
+            return m.group(1)
+    except Exception:  # noqa: BLE001
+        pass
+    m = NOTIFY_BODY_RE.search(body or "")
+    return m.group(1) if m else ""
+
+
+def message_dict(item, folder, store_id: str, body_max: int, ancestors: list | None = None) -> dict:
     body = safe(item, "Body", "") or ""
+    nid = notification_id(item, body)
     truncated = len(body) > body_max
     if truncated:
         body = body[:body_max]
@@ -141,6 +198,8 @@ def message_dict(item, folder, store_id: str, body_max: int) -> dict:
         "body": body,
         "body_truncated": truncated,
         "has_attachments": attachments > 0,
+        "folder_ancestors": ancestors if ancestors is not None else folder_ancestors(folder),
+        "notification_id": nid,
         "metadata": {
             "importance": safe(item, "Importance", 1),
             "categories": safe(item, "Categories", "") or "",
@@ -272,6 +331,17 @@ def op_list_mailboxes(s: OutlookSession, p: dict) -> dict:
 
 def op_list_folders(s: OutlookSession, p: dict) -> dict:
     max_depth = int(p.get("max_depth", 6))
+    root_id = (p.get("root_entry_id") or "").strip()
+    if root_id:
+        # only the subtree of one folder (fast: skips unrelated folders of the mailbox)
+        try:
+            folder = s.ns.GetFolderFromID(root_id, p.get("store_id") or None)
+        except Exception:  # noqa: BLE001
+            raise WorkerError("FOLDER_NOT_FOUND", "The monitored folder was not found (renamed, moved, deleted or no access).")
+        store_id = safe(folder, "StoreID", p.get("store_id", ""))
+        base = folder_path(folder)
+        parent = base.rsplit("/", 1)[0] if "/" in base else ""
+        return {"store_id": store_id, "root": folder_tree(folder, store_id, 0, min(max_depth, 4), parent)}
     shared = (p.get("shared_mailbox") or "").strip()
     if shared:
         # mailbox not added as a store: open its Inbox via the recipient
@@ -314,15 +384,16 @@ def resolve_folder(s: OutlookSession, req: dict):
     raise WorkerError("FOLDER_NOT_FOUND", f"Folder '{req.get('path', '')}' was not found (renamed, moved, deleted or no access).")
 
 
-def iter_mail(folder, since_utc: str):
+def iter_mail(folder, since_utc: str, unread_only: bool = False):
     items = folder.Items
     since = parse_utc(since_utc)
     restricted = None
     try:
-        # DASL datetime comparisons are in UTC
-        restricted = items.Restrict(
-            '@SQL="urn:schemas:httpmail:datereceived" >= \'' + since.strftime("%Y-%m-%d %H:%M") + "'"
-        )
+        # DASL datetime comparisons are in UTC. Reading UnRead never changes it.
+        flt = '"urn:schemas:httpmail:datereceived" >= \'' + since.strftime("%Y-%m-%d %H:%M") + "'"
+        if unread_only:
+            flt = "(" + flt + ' AND "urn:schemas:httpmail:read" = 0)'
+        restricted = items.Restrict("@SQL=" + flt)
     except Exception:  # noqa: BLE001
         try:
             local = since.astimezone().strftime("%m/%d/%Y %I:%M %p")
@@ -339,14 +410,17 @@ def iter_mail(folder, since_utc: str):
         item = restricted.GetNext()
 
 
-def collect_folders(folder, include_sub: bool):
+def collect_folders(folder, include_sub: bool, exclude=()):
+    """The folder and (optionally) all its mail subfolders, skipping excluded folders and their subtrees."""
+    if safe(folder, "EntryID", "") in exclude:
+        return
     yield folder
     if include_sub:
         try:
             for i in range(1, int(folder.Folders.Count) + 1):
                 sub = folder.Folders.Item(i)
                 if safe(sub, "DefaultItemType", 0) == 0:
-                    yield from collect_folders(sub, True)
+                    yield from collect_folders(sub, True, exclude)
         except Exception:  # noqa: BLE001
             return
 
@@ -366,24 +440,33 @@ def op_sync_messages(s: OutlookSession, p: dict) -> dict:
                 res["resolved_path"] = folder_path(folder)
             store_id = safe(folder, "StoreID", req.get("store_id", ""))
 
+            unread_only = bool(req.get("unread_only"))
+
             def mail_in(f):
                 stats["folders"] += 1
-                for item in iter_mail(f, req["since_utc"]):
+                for item in iter_mail(f, req["since_utc"], unread_only):
                     stats["items_scanned"] += 1
                     if safe(item, "Class", 0) != OL_MAIL_ITEM_CLASS:
                         stats["skipped_non_mail"] += 1
+                        continue
+                    # also checked here in case the provider ignored the read filter
+                    if unread_only and not safe(item, "UnRead", False):
+                        stats["skipped_read"] = stats.get("skipped_read", 0) + 1
                         continue
                     yield to_utc_iso(safe(item, "ReceivedTime")), item, f
 
             # One oldest-first stream over the folder and its subfolders, so that when the cap is hit
             # every message older than the newest one returned has been returned (the caller's watermark
             # relies on this). Capping folder by folder would skip older mail in later subfolders.
-            streams = [mail_in(f) for f in collect_folders(folder, bool(req.get("include_subfolders")))]
+            exclude = set(req.get("exclude_entry_ids") or [])
+            folders = list(collect_folders(folder, bool(req.get("include_subfolders")), exclude))
+            ancestors = {safe(f, "EntryID", ""): folder_ancestors(f) for f in folders}
+            streams = [mail_in(f) for f in folders]
             for _, item, f in heapq.merge(*streams, key=lambda t: t[0]):
                 if len(res["messages"]) >= max_items:
                     res["truncated"] = True
                     break
-                res["messages"].append(message_dict(item, f, store_id, body_max))
+                res["messages"].append(message_dict(item, f, store_id, body_max, ancestors.get(safe(f, "EntryID", ""))))
         except WorkerError as exc:
             res.update({"ok": False, "error_code": exc.code, "message": exc.message})
         except Exception as exc:  # noqa: BLE001
@@ -404,6 +487,417 @@ def op_get_message(s: OutlookSession, p: dict) -> dict:
     d = message_dict(item, folder, p.get("store_id", ""), 10_000_000)
     d["html_body"] = safe(item, "HTMLBody", "") or ""
     return d
+
+
+# --------------------------------------------------------------------------- reply window / completion
+
+def find_in_folder(folder, imid: str, errors: list | None = None):
+    """Find a mail item in one folder by its Internet Message-ID (stable across moves)."""
+    if not imid:
+        return None
+    flt = '@SQL="' + PR_INTERNET_MESSAGE_ID + '" = \'' + imid.replace("'", "''") + "'"
+    try:
+        found = folder.Items.Restrict(flt).GetFirst()
+        if found is not None and internet_message_id(found) == imid:
+            return found
+    except Exception as exc:  # noqa: BLE001
+        if errors is not None:
+            errors.append(f"search failed in '{folder_path(folder)}' ({type(exc).__name__})")
+    return None
+
+
+def walk_folders(folder, include_sub: bool, exclude=(), errors: list | None = None):
+    """Like collect_folders, but records folders whose subfolders could not be read."""
+    if safe(folder, "EntryID", "") in exclude:
+        return
+    yield folder
+    if include_sub:
+        try:
+            subs = [folder.Folders.Item(i) for i in range(1, int(folder.Folders.Count) + 1)]
+        except Exception as exc:  # noqa: BLE001
+            if errors is not None:
+                errors.append(f"subfolders of '{folder_path(folder)}' could not be read ({type(exc).__name__})")
+            return
+        for sub in subs:
+            if safe(sub, "DefaultItemType", 0) == 0:
+                yield from walk_folders(sub, True, exclude, errors)
+
+
+def find_item(s: OutlookSession, entry_id: str, store_id: str, imid: str, folders: list, errors: list | None = None):
+    """Resolve a message by EntryID; if that fails (EntryIDs change when an item moves between
+    folders), search the candidate folders by Internet Message-ID. A candidate with "recursive": true
+    is searched together with all its mail subfolders. Returns (item, relocated).
+    Folder problems are appended to `errors`, so "not found" is only claimed after a complete search."""
+    if entry_id:
+        try:
+            item = s.ns.GetItemFromID(entry_id, store_id or None)
+            if item is not None:
+                return item, False
+        except Exception:  # noqa: BLE001
+            pass
+    if not imid:
+        return None, False
+    searched = set()
+    for f in folders or []:
+        fid, sid = f.get("entry_id", ""), f.get("store_id", "")
+        if not fid:
+            continue
+        try:
+            top = s.ns.GetFolderFromID(fid, sid or None)
+        except Exception as exc:  # noqa: BLE001
+            if errors is not None:
+                errors.append(f"folder '{f.get('path') or fid[-8:]}' could not be opened ({type(exc).__name__})")
+            continue
+        for folder in walk_folders(top, bool(f.get("recursive")), (), errors):
+            key = safe(folder, "EntryID", "")
+            if key in searched:
+                continue
+            searched.add(key)
+            item = find_in_folder(folder, imid, errors)
+            if item is not None:
+                return item, True
+    return None, False
+
+
+def location(item) -> dict:
+    parent = safe(item, "Parent")
+    return {
+        "entry_id": safe(item, "EntryID", ""),
+        "store_id": safe(parent, "StoreID", "") if parent is not None else "",
+        "folder_entry_id": safe(parent, "EntryID", "") if parent is not None else "",
+        "folder_path": folder_path(parent) if parent is not None else "",
+    }
+
+
+def op_open_reply(s: OutlookSession, p: dict) -> dict:
+    """Open Outlook's own Reply (or Reply All) window for the source email. The body is not touched,
+    so Outlook adds the signature and the quoted conversation as usual. Nothing is saved or sent."""
+    item, relocated = find_item(s, p.get("entry_id", ""), p.get("store_id", ""), p.get("imid", ""), p.get("folders", []))
+    if item is None:
+        raise WorkerError("ITEM_NOT_FOUND", "The original email could not be found in Outlook (moved, deleted or no access).")
+    reply_all = bool(p.get("reply_all"))
+    reply = item.ReplyAll() if reply_all else item.Reply()
+    try:
+        reply.Display(False)
+    except Exception as exc:  # noqa: BLE001
+        raise WorkerError("DISPLAY_FAILED", "Outlook could not show the reply window. Close any open Outlook dialog and try again.", detail=type(exc).__name__)
+    return {"opened": True, "reply_all": reply_all, "relocated": relocated, "source": location(item)}
+
+
+def op_open_new_message(s: OutlookSession, p: dict) -> dict:
+    """Fallback when the source email is gone: a new (unthreaded) message to the sender, displayed only."""
+    to = (p.get("to") or "").strip()
+    if not to:
+        raise WorkerError("BAD_REQUEST", "No recipient address is stored for this ticket.")
+    mail = s.app.CreateItem(0)  # olMailItem
+    mail.To = to
+    if p.get("subject"):
+        mail.Subject = p["subject"]
+    try:
+        mail.Display(False)
+    except Exception as exc:  # noqa: BLE001
+        raise WorkerError("DISPLAY_FAILED", "Outlook could not show the new message window.", detail=type(exc).__name__)
+    return {"opened": True}
+
+
+def op_validate_folder(s: OutlookSession, p: dict) -> dict:
+    try:
+        folder = s.ns.GetFolderFromID(p["entry_id"], p.get("store_id") or None)
+    except Exception:  # noqa: BLE001
+        raise WorkerError("FOLDER_NOT_FOUND", "The selected folder was not found (renamed, moved, deleted or no access).")
+    if safe(folder, "DefaultItemType", 0) != 0:
+        raise WorkerError("NOT_MAIL_FOLDER", "The selected folder is not a mail folder.")
+    store = safe(folder, "Store")
+    return {
+        "entry_id": safe(folder, "EntryID", ""),
+        "store_id": safe(folder, "StoreID", p.get("store_id", "")),
+        "path": folder_path(folder),
+        "name": safe(folder, "Name", ""),
+        "mailbox": safe(store, "DisplayName", "") if store is not None else "",
+    }
+
+
+def same_folder(s: OutlookSession, a, b) -> bool:
+    ida, idb = safe(a, "EntryID", ""), safe(b, "EntryID", "")
+    if not ida or not idb:
+        return False
+    if ida == idb:
+        return True
+    try:
+        return bool(s.ns.CompareEntryIDs(ida, idb))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def is_flag_complete(item) -> bool:
+    return safe(item, "FlagStatus", 0) == OL_FLAG_COMPLETE
+
+
+def op_complete_messages(s: OutlookSession, p: dict) -> dict:
+    """Mark Done: flag each incoming email complete, then move it to the completion folder.
+    Each email gets its own result; one failure does not stop the others. Already-finished steps
+    are skipped (an email already in the destination counts as moved). Nothing is deleted or sent."""
+    dest_ref = p.get("dest") or {}
+    try:
+        dest = s.ns.GetFolderFromID(dest_ref["entry_id"], dest_ref.get("store_id") or None)
+    except Exception:  # noqa: BLE001
+        raise WorkerError("FOLDER_NOT_FOUND", "The completion folder was not found (renamed, moved, deleted or no access). Choose it again in Settings.")
+    results = []
+    for it in p.get("items", []):
+        r = {"message_id": it.get("message_id"), "flagged": False, "moved": False, "new_entry_id": None,
+             "new_store_id": None, "new_folder_entry_id": None, "new_folder_path": None, "error_code": None, "message": None}
+        results.append(r)
+        try:
+            folders = list(it.get("folders") or []) + [dest_ref]
+            item, _ = find_item(s, it.get("entry_id", ""), it.get("store_id", ""), it.get("imid", ""), folders)
+        except Exception:  # noqa: BLE001
+            item = None
+        if item is None:
+            r.update(error_code="ITEM_NOT_FOUND", message="The email was not found in Outlook (moved, deleted or no access).")
+            continue
+        # 1. flag complete
+        if not it.get("need_flag", True) or is_flag_complete(item):
+            r["flagged"] = True
+        else:
+            try:
+                try:
+                    item.MarkAsTask(OL_MARK_COMPLETE)
+                except Exception:  # noqa: BLE001
+                    item.FlagStatus = OL_FLAG_COMPLETE
+                item.Save()
+                r["flagged"] = True
+            except Exception as exc:  # noqa: BLE001
+                r.update(error_code="FLAG_FAILED", message=f"Could not flag the email complete ({type(exc).__name__}).")
+                continue  # do not move an email whose flag could not be set
+        # 2. move (never twice)
+        target = item
+        if same_folder(s, safe(item, "Parent"), dest) or not it.get("need_move", True):
+            r["moved"] = True
+        else:
+            try:
+                target = item.Move(dest)
+                r["moved"] = True
+            except Exception as exc:  # noqa: BLE001
+                r.update(error_code="MOVE_FAILED", message=f"Could not move the email to the completion folder ({type(exc).__name__}). Check that you can write to that folder.")
+        loc = location(target)
+        r.update(new_entry_id=loc["entry_id"], new_store_id=loc["store_id"], new_folder_entry_id=loc["folder_entry_id"], new_folder_path=loc["folder_path"])
+    return {"items": results}
+
+
+# --------------------------------------------------------------------------- scope verification / assignment
+
+def list_mail_ids(folder) -> list:
+    """(EntryID, Internet Message-ID) of every mail item in one folder. Uses the fast Table API; falls back
+    to Items. Raises on errors so the caller can mark the inventory incomplete."""
+    try:
+        table = folder.GetTable()
+    except Exception:  # noqa: BLE001 - provider without tables: slower item loop
+        table = None
+    rows = []
+    if table is not None:
+        cols = table.Columns
+        cols.RemoveAll()
+        for c in ("EntryID", "MessageClass", PR_INTERNET_MESSAGE_ID):
+            cols.Add(c)
+        while not table.EndOfTable:
+            v = table.GetNextRow().GetValues()
+            if str(v[1] or "").startswith("IPM.Note"):
+                rows.append((str(v[0] or ""), str(v[2] or "")))
+        return rows
+    items = folder.Items  # one collection object: each .Items access returns a new one in Outlook
+    item = items.GetFirst()
+    while item is not None:
+        if safe(item, "Class", 0) == OL_MAIL_ITEM_CLASS:
+            rows.append((safe(item, "EntryID", ""), internet_message_id(item)))
+        item = items.GetNext()
+    return rows
+
+
+def op_scope_inventory(s: OutlookSession, p: dict) -> dict:
+    """Every mail item currently in the scope folders (no date window, no unread filter) - identifiers only.
+    `complete` is true only if every folder and subfolder was read without error; the app applies
+    absence (emails that left the scope) only for complete inventories."""
+    exclude = set(p.get("exclude") or [])
+    out = {"scope_key": p.get("scope_key", ""), "complete": True, "folders": [], "items": [], "errors": []}
+    seen = set()
+    for req in p.get("folders", []):
+        try:
+            if req.get("default_folder"):
+                # e.g. 6 = the Inbox of that mailbox (used to find where emails went)
+                st = store_by_id(s.ns, req.get("store_id", ""))
+                top = st.GetDefaultFolder(int(req["default_folder"]))
+            else:
+                top = s.ns.GetFolderFromID(req["entry_id"], req.get("store_id") or None)
+        except Exception:  # noqa: BLE001
+            out["complete"] = False
+            out["errors"].append(f"Folder '{req.get('path', '')}' was not found or is not accessible.")
+            continue
+        for f in walk_folders(top, bool(req.get("include_subfolders")), exclude, out["errors"]):
+            fid = safe(f, "EntryID", "")
+            if fid in seen:
+                continue
+            seen.add(fid)
+            out["folders"].append({"entry_id": fid, "store_id": safe(f, "StoreID", req.get("store_id", "")), "path": folder_path(f), "ancestors": folder_ancestors(f)})
+            try:
+                for entry, imid in list_mail_ids(f):
+                    out["items"].append({"imid": imid, "entry_id": entry, "folder_entry_id": fid})
+            except Exception as exc:  # noqa: BLE001
+                out["errors"].append(f"'{folder_path(f)}' could not be read ({type(exc).__name__}).")
+    if out["errors"]:
+        out["complete"] = False
+    return out
+
+
+def op_locate_messages(s: OutlookSession, p: dict) -> dict:
+    """Lookup only: where is each email now? status found | not_found (all candidate folders searched
+    without error) | error (location unknown). Nothing is changed."""
+    results = []
+    for it in p.get("items", []):
+        r = {"message_id": it.get("message_id"), "status": "error", "entry_id": "", "store_id": "", "folder_entry_id": "", "folder_path": "", "ancestors": [], "error": None}
+        errors: list = []
+        try:
+            item, _ = find_item(s, it.get("entry_id", ""), it.get("store_id", ""), it.get("imid", ""), it.get("folders", []), errors)
+            if item is not None:
+                parent = safe(item, "Parent")
+                r.update(status="found", entry_id=safe(item, "EntryID", ""), store_id=safe(parent, "StoreID", "") if parent is not None else "",
+                         folder_entry_id=safe(parent, "EntryID", "") if parent is not None else "", folder_path=folder_path(parent) if parent is not None else "",
+                         ancestors=folder_ancestors(parent) if parent is not None else [])
+            elif errors:
+                r["error"] = "; ".join(errors[:3])
+            else:
+                r["status"] = "not_found"
+        except Exception as exc:  # noqa: BLE001
+            r["error"] = type(exc).__name__
+        results.append(r)
+    return {"items": results}
+
+
+def op_move_messages(s: OutlookSession, p: dict) -> dict:
+    """Assignment: move each email into the staff member's folder. Read state and flags are not changed;
+    an email already in the destination counts as moved; one failure does not stop the others."""
+    dest_ref = p.get("dest") or {}
+    try:
+        dest = s.ns.GetFolderFromID(dest_ref["entry_id"], dest_ref.get("store_id") or None)
+    except Exception:  # noqa: BLE001
+        raise WorkerError("FOLDER_NOT_FOUND", "The staff member's folder was not found (renamed, moved, deleted or no access). Update it in Settings › Staff Assignment.")
+    dest_ancestors = folder_ancestors(dest)
+    results = []
+    for it in p.get("items", []):
+        r = {"message_id": it.get("message_id"), "moved": False, "new_entry_id": None, "new_store_id": None, "new_folder_entry_id": None,
+             "new_folder_path": None, "ancestors": [], "error_code": None, "message": None}
+        results.append(r)
+        try:
+            item, _ = find_item(s, it.get("entry_id", ""), it.get("store_id", ""), it.get("imid", ""), list(it.get("folders") or []) + [dest_ref])
+        except Exception:  # noqa: BLE001
+            item = None
+        if item is None:
+            r.update(error_code="ITEM_NOT_FOUND", message="The email was not found in Outlook (moved, deleted or no access).")
+            continue
+        target = item
+        if not same_folder(s, safe(item, "Parent"), dest):
+            try:
+                target = item.Move(dest)
+            except Exception as exc:  # noqa: BLE001
+                r.update(error_code="MOVE_FAILED", message=f"Could not move the email to the staff folder ({type(exc).__name__}). Check that you can write to that folder.")
+                continue
+        loc = location(target)
+        r.update(moved=True, new_entry_id=loc["entry_id"], new_store_id=loc["store_id"] or safe(dest, "StoreID", ""), new_folder_entry_id=loc["folder_entry_id"] or safe(dest, "EntryID", ""),
+                 new_folder_path=loc["folder_path"] or folder_path(dest), ancestors=folder_ancestors(safe(target, "Parent")) if safe(target, "Parent") is not None else dest_ancestors)
+    return {"items": results}
+
+
+def op_list_accounts(s: OutlookSession, p: dict) -> dict:
+    out = []
+    try:
+        accounts = s.ns.Accounts
+        for i in range(1, int(accounts.Count) + 1):
+            a = accounts.Item(i)
+            out.append({"display_name": safe(a, "DisplayName", ""), "smtp": safe(a, "SmtpAddress", "")})
+    except Exception:  # noqa: BLE001
+        pass
+    return {"accounts": out}
+
+
+def find_account(s: OutlookSession, smtp: str):
+    accounts = s.ns.Accounts
+    for i in range(1, int(accounts.Count) + 1):
+        a = accounts.Item(i)
+        if (safe(a, "SmtpAddress", "") or "").strip().lower() == smtp.strip().lower():
+            return a
+    return None
+
+
+def op_send_notification(s: OutlookSession, p: dict) -> dict:
+    """Send the assignment handoff email to ONE staff address. Two stages:
+    prepare (errors here mean nothing was sent) and send (errors here are reported as uncertain)."""
+    to = (p.get("to") or "").strip()
+    nid = (p.get("notification_id") or "").strip()
+    if not to or "@" not in to or ";" in to or "," in to:
+        raise WorkerError("BAD_REQUEST", "Exactly one staff email address is required.", stage="prepare")
+    if not nid:
+        raise WorkerError("BAD_REQUEST", "A notification id is required.", stage="prepare")
+    acct_smtp = (p.get("account") or "").strip()
+    try:
+        account = find_account(s, acct_smtp) if acct_smtp else None
+        if acct_smtp and account is None:
+            raise WorkerError("ACCOUNT_NOT_FOUND", f"The sending account '{acct_smtp}' is not in this Outlook profile. Choose another in Settings › Staff Assignment.", stage="prepare")
+        mail = s.app.CreateItem(0)  # olMailItem
+        mail.To = to
+        mail.Subject = p.get("subject") or "ASR/Audit ticket assigned to you"
+        mail.HTMLBody = p.get("html_body") or ""
+        try:
+            mail.PropertyAccessor.SetProperty(NOTIFY_PROP, nid)
+        except Exception:  # noqa: BLE001 - the body marker still identifies the notification
+            pass
+        if account is not None:
+            try:
+                mail.SendUsingAccount = account
+            except Exception:  # noqa: BLE001
+                mail._oleobj_.Invoke(*(SEND_USING_ACCOUNT_DISPID, 0, 8, 0, account))
+        recips = mail.Recipients
+        if int(recips.Count) != 1:
+            raise WorkerError("BAD_REQUEST", "The notification must have exactly one recipient.", stage="prepare")
+        if not recips.ResolveAll():
+            raise WorkerError("RECIPIENT_UNRESOLVED", f"Outlook could not resolve the address '{to}'.", stage="prepare")
+        mail.Save()
+        draft_id = safe(mail, "EntryID", "")
+    except WorkerError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise WorkerError("NOTIFY_PREPARE_FAILED", f"The notification could not be prepared ({type(exc).__name__}); nothing was sent.", stage="prepare")
+    try:
+        mail.Send()
+    except Exception as exc:  # noqa: BLE001
+        raise WorkerError("SEND_UNCERTAIN", f"Outlook reported an error during Send ({type(exc).__name__}). The email may or may not have been sent.", stage="send")
+    used = acct_smtp
+    if not used:
+        try:
+            used = s.ns.Accounts.Item(1).SmtpAddress
+        except Exception:  # noqa: BLE001
+            used = ""
+    return {"submitted": True, "draft_entry_id": draft_id, "account": used, "notification_id": nid}
+
+
+def op_find_notification(s: OutlookSession, p: dict) -> dict:
+    """Look for a notification (by its id) in Sent Items and Outbox of the sending account."""
+    nid = (p.get("notification_id") or "").strip()
+    acct_smtp = (p.get("account") or "").strip()
+    store = None
+    if acct_smtp:
+        a = find_account(s, acct_smtp)
+        store = safe(a, "DeliveryStore") if a is not None else None
+    if store is None:
+        store = s.ns.DefaultStore
+    flt = '@SQL="' + NOTIFY_PROP + '" = \'' + nid.replace("'", "''") + "'"
+    for fid, name in ((OL_FOLDER_SENT, "Sent Items"), (OL_FOLDER_OUTBOX, "Outbox")):
+        try:
+            folder = store.GetDefaultFolder(fid)
+            item = folder.Items.Restrict(flt).GetFirst()
+        except Exception as exc:  # noqa: BLE001
+            raise WorkerError("SEARCH_FAILED", f"{name} could not be searched ({type(exc).__name__}).")
+        if item is not None:
+            return {"found": True, "where": name, "entry_id": safe(item, "EntryID", "")}
+    return {"found": False}
 
 
 BODY_TAG = re.compile(r"<body[^>]*>", re.IGNORECASE)
@@ -470,6 +964,16 @@ OPS = {
     "sync_messages": op_sync_messages,
     "get_message": op_get_message,
     "create_reply_draft": op_create_reply_draft,
+    "open_reply": op_open_reply,
+    "open_new_message": op_open_new_message,
+    "validate_folder": op_validate_folder,
+    "complete_messages": op_complete_messages,
+    "scope_inventory": op_scope_inventory,
+    "locate_messages": op_locate_messages,
+    "move_messages": op_move_messages,
+    "list_accounts": op_list_accounts,
+    "send_notification": op_send_notification,
+    "find_notification": op_find_notification,
 }
 
 
@@ -495,6 +999,29 @@ def mock_dispatch(op: str, p: dict) -> dict:
         return {"entry_id": "MOCK-DRAFT", "mode": p.get("mode", "reply"), "inline_images": 0, "sent": False}
     if op == "get_message":
         return {"body": "mock body", "html_body": ""}
+    if op == "open_reply":
+        return {"opened": True, "reply_all": bool(p.get("reply_all")), "relocated": False, "source": {}}
+    if op == "open_new_message":
+        return {"opened": True}
+    if op == "validate_folder":
+        return {"entry_id": p.get("entry_id", ""), "store_id": p.get("store_id", ""), "path": "Inbox/Completed", "name": "Completed", "mailbox": "Mock"}
+    if op == "scope_inventory":
+        return {"scope_key": p.get("scope_key", ""), "complete": True, "folders": [], "items": [], "errors": []}
+    if op == "locate_messages":
+        return {"items": [{"message_id": i.get("message_id"), "status": "not_found", "ancestors": []} for i in p.get("items", [])]}
+    if op == "move_messages":
+        return {"items": [{"message_id": i.get("message_id"), "moved": True, "new_entry_id": f"MOCK-M-{i.get('message_id')}", "new_store_id": "MOCKSTORE",
+                           "new_folder_entry_id": (p.get("dest") or {}).get("entry_id", ""), "new_folder_path": "Inbox/Staff", "ancestors": ["MOCK-Inbox"]} for i in p.get("items", [])]}
+    if op == "list_accounts":
+        return {"accounts": [{"display_name": "Mock", "smtp": "mock@example.org"}]}
+    if op == "send_notification":
+        return {"submitted": True, "draft_entry_id": "MOCK-N", "account": p.get("account") or "mock@example.org", "notification_id": p.get("notification_id", "")}
+    if op == "find_notification":
+        return {"found": False}
+    if op == "complete_messages":
+        return {"items": [{"message_id": i.get("message_id"), "flagged": True, "moved": True, "new_entry_id": f"MOCK-{i.get('message_id')}",
+                           "new_store_id": "MOCKSTORE", "new_folder_entry_id": "MOCK-DONE", "new_folder_path": "Inbox/Completed",
+                           "error_code": None, "message": None} for i in p.get("items", [])]}
     raise WorkerError("BAD_REQUEST", f"Unknown operation '{op}'.")
 
 

@@ -72,6 +72,10 @@ pub struct FolderRequest {
     pub path: String,
     pub include_subfolders: bool,
     pub since_utc: String,
+    /// Scan mode "unread": only unread messages are returned (read state is never changed).
+    pub unread_only: bool,
+    /// Folders (and their subtrees) never scanned, e.g. the Mark Done completion folder.
+    pub exclude_entry_ids: Vec<String>,
 }
 
 /// Window start for a folder: last received time minus the overlap, or the full
@@ -142,6 +146,8 @@ pub fn build_requests(conn: &Connection, s: &Settings, now: DateTime<Utc>) -> Ap
             path: f.path.clone(),
             include_subfolders: *subs,
             since_utc: since,
+            unread_only: s.scan_mode == "unread",
+            exclude_entry_ids: s.archive_folder.iter().map(|a| a.entry_id.clone()).collect(),
         });
     }
     Ok((reqs, fulls))
@@ -293,6 +299,16 @@ mod tests {
         let (r, _) = build_requests(&c, &s, Utc::now()).unwrap();
         assert_eq!(r.len(), 2);
         assert!(!r[0].include_subfolders);
+        assert!(!r[0].unread_only);
+        s.scan_mode = "unread".into();
+        let (r, _) = build_requests(&c, &s, Utc::now()).unwrap();
+        assert!(r.iter().all(|x| x.unread_only));
+        assert!(r[0].exclude_entry_ids.is_empty());
+        s.archive_folder = Some(FolderRef { store_id: "S".into(), entry_id: "DONE".into(), path: "Inbox/Wenjie/Done".into() });
+        s.selected_with_children = vec!["SUB".into()];
+        let (r, _) = build_requests(&c, &s, Utc::now()).unwrap();
+        assert!(r[1].include_subfolders, "selected subfolder with its children");
+        assert!(r.iter().all(|x| x.exclude_entry_ids == vec!["DONE".to_string()]), "the completion folder is never scanned");
     }
 
     #[test]

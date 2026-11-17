@@ -5,7 +5,7 @@
   import { app, toast } from "../lib/stores.svelte";
 
   let r = $state<Report | null>(null);
-  let group = $state("all");
+  let group = $state("");
 
   async function load() {
     try { r = await api.report(); } catch (e) { toast(errMsg(e), "error"); }
@@ -29,7 +29,7 @@
   <div class="row"><h2 style="margin:0">Reports</h2><span class="grow"></span><button onclick={load}>Refresh</button></div>
   {#if r}
     <div class="tiles">
-      {#each [["Total tickets", r.total], ["Open", r.open], ["Created last 7 days", r.created_last_7_days], ["Created last 30 days", r.created_last_30_days], ["Open > 7 days", r.open_older_than_7_days], ["Follow-ups due", r.followups_due], ["Outlook drafts created", r.outlook_drafts_created]] as [label, n]}
+      {#each [["Total tickets", r.total], ["In Progress", r.open], ["Created last 7 days", r.created_last_7_days], ["Created last 30 days", r.created_last_30_days], ["In Progress > 7 days", r.open_older_than_7_days], ["Follow-ups due", r.followups_due]] as [label, n]}
         <div class="panel tile"><div class="n">{n}</div><div class="muted small">{label}</div></div>
       {/each}
     </div>
@@ -55,8 +55,7 @@
       <h3>Export</h3>
       <div class="row">
         <select style="width:220px" bind:value={group}>
-          <option value="all">All tickets</option><option value="open">Open tickets</option><option value="done">Resolved / Closed</option>
-          <option value="review">Needs Review</option><option value="waiting">Waiting</option>
+          <option value="">All tickets</option><option value="In Progress">In Progress</option><option value="Done">Done</option>
         </select>
         <button class="primary" onclick={exportCsv}>Export CSV (Excel-compatible)…</button>
       </div>

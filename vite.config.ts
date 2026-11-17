@@ -7,5 +7,6 @@ export default defineConfig({
   publicDir: "templates",
   clearScreen: false,
   server: { port: 1420, strictPort: true, watch: { ignored: ["**/src-tauri/**"] } },
-  build: { target: "es2022", outDir: "dist", emptyOutDir: true },
+  // dist-web (not dist): dist\ holds release packages (portable ZIP) and must not be emptied by frontend builds
+  build: { target: "es2022", outDir: "dist-web", emptyOutDir: true },
 });

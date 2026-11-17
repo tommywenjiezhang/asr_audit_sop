@@ -33,12 +33,14 @@ pub struct WorkerConfig {
 
 impl WorkerConfig {
     /// Resolve how to run the worker: packaged exe > configured python > py launcher > python on PATH.
-    pub fn resolve(python_path: &str, resource_dir: Option<&Path>, dev_dir: &Path) -> AppResult<WorkerConfig> {
+    /// `resource_dir` is the folder of the app executable (installed or extracted ZIP, any path).
+    /// `dev_dir` is the source checkout and is only passed by development (debug) builds.
+    pub fn resolve(python_path: &str, resource_dir: Option<&Path>, dev_dir: Option<&Path>) -> AppResult<WorkerConfig> {
         let candidates_dirs: Vec<PathBuf> = resource_dir
             .map(|r| vec![r.join("outlook_worker"), r.to_path_buf()])
             .unwrap_or_default()
             .into_iter()
-            .chain(std::iter::once(dev_dir.to_path_buf()))
+            .chain(dev_dir.map(Path::to_path_buf))
             .collect();
         for d in &candidates_dirs {
             let exe = d.join("outlook_worker.exe");
@@ -165,7 +167,7 @@ mod tests {
     #[tokio::test]
     async fn bridge_runs_worker_in_mock_mode() {
         let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../outlook_worker");
-        let Ok(cfg) = WorkerConfig::resolve("", None, &dev) else {
+        let Ok(cfg) = WorkerConfig::resolve("", None, Some(&dev)) else {
             eprintln!("python not available; skipping");
             return;
         };
@@ -174,5 +176,19 @@ mod tests {
         let resp = call(&cfg, "no_such_op", serde_json::json!({"mock": true}), Duration::from_secs(60)).await.unwrap();
         assert!(!resp.ok);
         assert_eq!(resp.error_code.as_deref(), Some("BAD_REQUEST"));
+    }
+
+    /// The packaged layout `<app folder>\outlook_worker\outlook_worker.exe` is found from the app folder
+    /// alone, also when the folder path contains spaces; nothing else is consulted.
+    #[test]
+    fn packaged_worker_found_next_to_app_in_folder_with_spaces() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = dir.path().join("My Apps").join("ASR Desk 1.0");
+        std::fs::create_dir_all(app.join("outlook_worker")).unwrap();
+        let exe = app.join("outlook_worker").join("outlook_worker.exe");
+        std::fs::write(&exe, b"stub").unwrap();
+        let cfg = WorkerConfig::resolve("", Some(&app), None).unwrap();
+        assert_eq!(cfg.program, exe);
+        assert!(cfg.args.is_empty(), "the packaged worker needs no Python");
     }
 }

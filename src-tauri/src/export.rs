@@ -33,7 +33,7 @@ fn scalar(conn: &Connection, sql: &str) -> AppResult<i64> {
 }
 
 pub fn report(conn: &Connection) -> AppResult<Report> {
-    let open_set = "('New','Needs Review','In Progress','Waiting for User','Waiting for Internal Action')";
+    let open_set = "('Unassigned','Assigned','In Progress')";
     let by_issue_raw = pairs(conn, "SELECT issue_type, COUNT(*) FROM tickets GROUP BY issue_type ORDER BY 2 DESC")?;
     let by_issue = by_issue_raw
         .into_iter()
@@ -67,9 +67,10 @@ fn csv_cell(s: &str) -> String {
     }
 }
 
-/// Export tickets (optionally filtered by status group) with all field values to CSV.
-pub fn export_csv(conn: &Connection, path: &Path, status_group: &str) -> AppResult<usize> {
-    let q = crate::tickets::ListQuery { group: status_group.to_string(), limit: 1000, ..Default::default() };
+/// Export tickets (optionally filtered by status: "" / "all" / "In Progress" / "Done") with all field values to CSV.
+pub fn export_csv(conn: &Connection, path: &Path, status: &str) -> AppResult<usize> {
+    let status = if status == "all" { "" } else { status };
+    let q = crate::tickets::ListQuery { status: status.to_string(), limit: 1000, ..Default::default() };
     let mut ids: Vec<i64> = Vec::new();
     let mut offset = 0;
     loop {
@@ -92,6 +93,7 @@ pub fn export_csv(conn: &Connection, path: &Path, status_group: &str) -> AppResu
         "Ticket ID", "Status", "Priority", "Issue Type", "School NJIIS ID", "School Name", "School Verification", "Sender",
         "Sender Email", "Original Subject", "Assigned Staff", "Date Created", "Last Updated", "Last Email Received",
         "Last Response", "Next Follow-up", "Possible Duplicate Of", "Internal Notes", "Resolution Notes",
+        "First Received", "Completed", "Staff Actions",
     ];
     let mut out = String::from("\u{feff}");
     out.push_str(&header.iter().map(|h| csv_cell(h)).chain(field_keys.iter().map(|k| csv_cell(&format!("Field: {k}")))).collect::<Vec<_>>().join(","));
@@ -106,6 +108,7 @@ pub fn export_csv(conn: &Connection, path: &Path, status_group: &str) -> AppResu
             t.school_verification.clone(), o(&t.sender_name), o(&t.sender_email), o(&t.original_subject), o(&t.assigned_staff),
             t.created_at.clone(), t.updated_at.clone(), o(&t.last_email_received_at), o(&t.last_response_at), o(&t.next_followup_date),
             t.possible_duplicate_of.map(crate::tickets::display_id).unwrap_or_default(), o(&t.internal_notes), o(&t.resolution_notes),
+            o(&t.first_received_at), o(&t.completed_at), o(&t.staff_actions),
         ];
         for k in &field_keys {
             row.push(fs.iter().find(|f| &f.key == k).map(|f| crate::render::display_value(&f.effective)).unwrap_or_default());
@@ -154,6 +157,7 @@ pub fn restore(conn: &mut Connection, src: &Path, safety_copy: &Path) -> AppResu
     }
     conn.execute_batch("PRAGMA foreign_keys=ON;")?;
     crate::db::migrate(conn)?;
+    crate::db::after_migrate(conn)?;
     crate::templates_store::seed_embedded(conn)?;
     Ok(())
 }

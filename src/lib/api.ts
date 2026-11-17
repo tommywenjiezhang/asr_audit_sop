@@ -11,11 +11,64 @@ export interface CatalogInfo {
 export interface TicketSummary {
   id: number; display_id: string; status: string; priority: string; issue_type: string; school_name?: string; school_njiis_id?: string;
   school_verification: string; sender_name?: string; sender_email?: string; original_subject?: string; assigned_staff?: string;
-  updated_at: string; last_email_received_at?: string; next_followup_date?: string; possible_duplicate_of?: number; has_draft: boolean;
+  updated_at: string; last_email_received_at?: string; next_followup_date?: string; possible_duplicate_of?: number;
+  first_received_at?: string; completed_at?: string; needs_review: boolean; low_confidence: boolean; issue_count?: number;
+  assignee_staff_id?: number | null; assignee_name?: string | null; assigned_at?: string | null; ownership_conflict: boolean;
+  scope_state: "current" | "history" | "unverified"; scope_reason?: string | null; ticket_ref?: string | null; in_scope_count?: number;
 }
 export interface Ticket extends TicketSummary {
   issue_type_source: string; classification_confidence?: number; conversation_id?: string; internal_notes?: string;
-  resolution_notes?: string; source: string; created_at: string; last_response_at?: string;
+  resolution_notes?: string; source: string; created_at: string; last_response_at?: string; staff_actions?: string; last_prompt_at?: string;
+  scope_changed_at?: string | null;
+}
+export interface IssueRow { issue_type: string; source: string; position: number }
+export interface CompletionRow {
+  message_id: number; flagged_at?: string; moved_at?: string; dest_path?: string; last_error?: string; last_error_at?: string; attempts: number;
+}
+export interface CompletionOutcome { done: boolean; flagged: number; moved: number; failed: { message_id: number; subject: string; error: string }[]; dest_path: string }
+export interface ListQuery {
+  view?: string; status?: string; assignee?: string; reason?: string; school?: string; sender?: string; min_age_days?: number;
+  assigned_from?: string; assigned_to?: string;
+  search?: string; issue_type?: string; received_from?: string; received_to?: string;
+  completed_from?: string; completed_to?: string; sort?: string; limit?: number; offset?: number;
+}
+export interface Staff {
+  id: number; display_name: string; email: string; mailbox_name?: string | null; store_id: string; folder_entry_id: string;
+  folder_path: string; active: boolean; created_at: string; updated_at: string;
+}
+export interface StaffInput { id?: number | null; display_name: string; email: string; mailbox_name: string; store_id: string; folder_entry_id: string; folder_path: string }
+export interface AssignPreview { ticket_id: number; display_id: string; from_name?: string | null; to: Staff; emails: number; already_in_folder: number; will_notify: boolean; blocked?: string | null }
+export interface MoveFailure { message_id: number; subject: string; error: string }
+export interface AssignOutcome {
+  ticket_id: number; display_id: string; result: "assigned" | "no_change" | "moves_failed" | "blocked" | "busy"; message: string;
+  failures: MoveFailure[]; op_id?: number | null; notify_state: string; notify_error?: string | null;
+}
+export interface MoveRow { message_id: number; subject?: string; moved_at?: string | null; new_folder_path?: string | null; last_error?: string | null; attempts: number }
+export interface AssignmentOp {
+  id: number; ticket_id: number; from_staff_id?: number | null; from_name?: string | null; to_staff_id: number; to_name?: string | null;
+  operator: string; note?: string | null; created_at: string; state: string; dest_path: string; prev_folders?: string | null; finished_at?: string | null;
+  notify_state: string; notify_id?: string | null; notify_recipient?: string | null; notify_account?: string | null; notify_attempts: number;
+  notify_at?: string | null; notify_error?: string | null; notify_entry_id?: string | null; notify_checked_at?: string | null; moves: MoveRow[];
+}
+export interface ScopeStatus {
+  configured: boolean; mailbox: string; summary: string; last_ok_at?: string | null; last_attempt_at?: string | null; last_error?: string | null;
+  stale: boolean; running: boolean; current: number; history: number; unverified: number;
+}
+export interface OverviewRow { staff_id?: number | null; name: string; active: boolean; folder_path?: string | null; folder_in_scope: boolean; unassigned: number; assigned: number; in_progress: number; done: number }
+export interface Overview { scope_summary: string; last_reconciled_at?: string | null; done_from: string; done_to: string; rows: OverviewRow[]; awaiting_verification: number; notes: string[] }
+
+export const HISTORY_REASONS: [string, string][] = [
+  ["completed", "Completed"], ["reassigned", "Reassigned outside the selected scope"], ["moved", "Moved elsewhere"],
+  ["not_found", "No longer found after successful reconciliation"], ["unknown", "Outside the scope; location not verified"],
+];
+export function reasonLabel(r?: string | null): string {
+  return HISTORY_REASONS.find(([k]) => k === r)?.[1] ?? (r || "");
+}
+/** "Unassigned" / "Assigned to Aaron" / "In Progress — Aaron" / "Done — Aaron" */
+export function statusText(status: string, assignee?: string | null): string {
+  if (status === "Unassigned" || !assignee) return status;
+  if (status === "Assigned") return `Assigned to ${assignee}`;
+  return `${status} — ${assignee}`;
 }
 export interface TicketField {
   key: string; extracted_value?: string; extraction_confidence?: string; manual_value?: string | null; verified: boolean;
@@ -23,10 +76,14 @@ export interface TicketField {
 }
 export interface MessageRow {
   id: number; subject?: string; sender_name?: string; sender_email?: string; received_at?: string; body_text?: string;
-  body_truncated: boolean; folder_path?: string; link_type: string; is_internal: boolean; has_attachments: boolean;
+  body_truncated: boolean; folder_path?: string; link_type: string; is_internal: boolean; has_attachments: boolean; entry_id?: string;
+  scope_state: "in" | "out" | "unknown"; out_reason?: string | null; location_status?: string | null; location_checked_at?: string | null; owner_name?: string | null;
 }
 export interface HistoryRow { id: number; at: string; actor: string; action: string; field?: string; old_value?: string; new_value?: string }
-export interface TicketDetail { ticket: Ticket; fields: TicketField[]; messages: MessageRow[]; history: HistoryRow[] }
+export interface TicketDetail {
+  ticket: Ticket; fields: TicketField[]; messages: MessageRow[]; history: HistoryRow[];
+  issues: IssueRow[]; schools: number[]; completion: CompletionRow[]; assignments: AssignmentOp[];
+}
 export interface ListResult { rows: TicketSummary[]; total: number; counts: [string, number][] }
 export interface Unresolved { key: string; label: string; known: boolean }
 export interface DraftCheck { unresolved: Unresolved[]; unverified_claims: string[]; sop_status?: string; sop_reference?: string }
@@ -47,10 +104,13 @@ export interface TemplateVersion { id: number; version: number; subject_template
 export interface FolderRef { store_id: string; entry_id: string; path: string }
 export interface Settings {
   mailbox_name: string; mailbox_store_id: string; folder: FolderRef | null; subfolder_mode: string; selected_subfolders: FolderRef[];
+  selected_with_children: string[];
   sync_enabled: boolean; interval_minutes: number; check_on_startup: boolean; launch_at_login: boolean; close_to_tray: boolean;
   initial_lookback_days: number; overlap_minutes: number; full_rescan_hours: number; max_messages_per_sync: number; body_max_chars: number;
   python_path: string; staff_name: string; default_assigned_staff: string; asr_deadline: string; internal_senders: string[];
   duplicate_window_days: number; open_outlook_draft_after_create: boolean;
+  scan_mode: "all" | "unread"; archive_folder: FolderRef | null; archive_mailbox_name: string; prompt_instructions: string;
+  notify_account: string;
 }
 export interface IngestReport { seen: number; new_messages: number; already_imported: number; moved: number; created_tickets: number; updated_tickets: number; skipped_internal: number; duplicates_flagged: number }
 export interface SyncStatus {
@@ -63,7 +123,7 @@ export interface Report {
   created_last_7_days: number; created_last_30_days: number; open_older_than_7_days: number; followups_due: number;
   outlook_drafts_created: number; by_week: [string, number][];
 }
-export interface AppInfo { version: string; data_dir: string; db_path: string; log_dir: string; startup_ms: number; schema_version: number; catalog_version: number; template_count: number }
+export interface AppInfo { version: string; data_dir: string; db_path: string; log_dir: string; startup_ms: number; schema_version: number; catalog_version: number; template_count: number; worker?: string }
 export interface OutlookDraftResult { created: boolean; needs_confirmation: boolean; check: DraftCheck; entry_id?: string; mode?: string }
 
 export interface ApiError { code: string; message: string }
@@ -74,13 +134,41 @@ export function errMsg(e: unknown): string {
 
 export const api = {
   catalog: () => invoke<CatalogInfo>("catalog_get"),
-  tickets: (query: { group?: string; search?: string; issue_type?: string; limit?: number; offset?: number }) =>
-    invoke<ListResult>("tickets_list", { query }),
+  tickets: (query: ListQuery) => invoke<ListResult>("tickets_list", { query }),
   ticket: (id: number) => invoke<TicketDetail>("ticket_detail", { id }),
   createTicket: (input: Record<string, string>) => invoke<number>("ticket_create", { input }),
   updateTicket: (id: number, patch: Record<string, unknown>) => invoke<Ticket>("ticket_update", { id, patch }),
   setField: (id: number, key: string, value: string | null, verified: boolean) => invoke<TicketField>("ticket_set_field", { id, key, value, verified }),
+  setIssues: (id: number, issues: string[]) => invoke<IssueRow[]>("ticket_set_issues", { id, issues }),
+  addSchool: (id: number) => invoke<number>("ticket_add_school", { id }),
+  removeSchool: (id: number, slot: number) => invoke<void>("ticket_remove_school", { id, slot }),
+  reopen: (id: number) => invoke<Ticket>("ticket_reopen", { id }),
+  complete: (id: number) => invoke<CompletionOutcome>("ticket_complete", { id }),
+  prompt: (id: number) => invoke<string>("prompt_get", { id }),
+  promptCopied: (id: number, text: string) => invoke<string>("prompt_copied", { id, text }),
+  promptDefault: () => invoke<string>("prompt_default_instructions"),
+  openReply: (ticketId: number, replyAll: boolean, messageId: number | null = null) =>
+    invoke<{ opened: boolean; reply_all: boolean; message_id: number; relocated: boolean }>("outlook_open_reply", { ticketId, messageId, replyAll }),
+  openNewMessage: (ticketId: number) => invoke<void>("outlook_open_new", { ticketId }),
+  validateFolder: (storeId: string, entryId: string) =>
+    invoke<{ entry_id: string; store_id: string; path: string; name: string; mailbox: string }>("outlook_validate_folder", { storeId, entryId }),
   refreshMessage: (messageId: number) => invoke<string>("message_refresh", { messageId }),
+  startWork: (id: number) => invoke<Ticket>("ticket_start_work", { id }),
+
+  staffList: (includeInactive: boolean) => invoke<Staff[]>("staff_list", { includeInactive }),
+  staffSave: (input: StaffInput) => invoke<Staff>("staff_save", { input }),
+  staffSetActive: (id: number, active: boolean) => invoke<Staff>("staff_set_active", { id, active }),
+  currentStaff: () => invoke<number | null>("staff_current_get"),
+  setCurrentStaff: (id: number | null) => invoke<void>("staff_current_set", { id }),
+  accounts: () => invoke<{ accounts: { display_name: string; smtp: string }[] }>("outlook_list_accounts"),
+  assignPreview: (ticketIds: number[], staffId: number) => invoke<AssignPreview[]>("assign_preview", { ticketIds, staffId }),
+  assign: (ticketIds: number[], staffId: number, note: string) => invoke<AssignOutcome[]>("tickets_assign", { ticketIds, staffId, note }),
+  assignmentRetry: (ticketId: number) => invoke<AssignOutcome>("assignment_retry", { ticketId }),
+  notificationRetry: (opId: number) => invoke<[string, string | null]>("notification_retry", { opId }),
+  notificationCheck: (opId: number) => invoke<string>("notification_check", { opId }),
+  notificationResend: (opId: number) => invoke<[string, string | null]>("notification_resend", { opId }),
+  scopeStatus: () => invoke<ScopeStatus>("scope_status"),
+  overview: (doneFrom: string, doneTo: string) => invoke<Overview>("overview_get", { doneFrom, doneTo }),
 
   templates: (issueType?: string) => invoke<TemplateRow[]>("templates_list", { issueType: issueType ?? null }),
   template: (id: string) => invoke<TemplateRow>("template_get", { id }),
@@ -109,21 +197,47 @@ export const api = {
 
   outlookTest: () => invoke<Record<string, unknown>>("outlook_test"),
   mailboxes: () => invoke<{ mailboxes: { display_name: string; store_id: string }[] }>("outlook_list_mailboxes"),
-  folders: (storeId: string | null, sharedMailbox: string | null) =>
-    invoke<{ store_id: string; root: FolderNode }>("outlook_list_folders", { storeId, sharedMailbox }),
+  folders: (storeId: string | null, sharedMailbox: string | null, rootEntryId: string | null = null) =>
+    invoke<{ store_id: string; root: FolderNode }>("outlook_list_folders", { storeId, sharedMailbox, rootEntryId }),
   syncNow: () => invoke<{ report: IngestReport; warnings: string[]; folders: number }>("sync_now"),
   syncStatus: () => invoke<SyncStatus>("sync_status"),
 
   settings: () => invoke<Settings>("settings_get"),
   saveSettings: (settings: Settings) => invoke<Settings>("settings_save", { settings }),
   report: () => invoke<Report>("report_get"),
-  exportCsv: (path: string, group: string) => invoke<number>("export_csv", { path, group }),
+  exportCsv: (path: string, status: string) => invoke<number>("export_csv", { path, status }),
   backup: (path: string) => invoke<void>("db_backup", { path }),
   restore: (path: string) => invoke<string>("db_restore", { path }),
   appInfo: () => invoke<AppInfo>("app_info"),
 };
 
 // ------------------------------------------------------------ helpers
+
+/** UTC instant of local midnight at the start of a "YYYY-MM-DD" date (dayOffset 1 = the next day). */
+export function localDayStart(date: string, dayOffset = 0): string {
+  const m = date.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return "";
+  return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]) + dayOffset, 0, 0, 0).toISOString();
+}
+
+/** Put text on the clipboard without any manual selection. Throws if both methods fail. */
+export async function copyText(text: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(text);
+    return;
+  } catch {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.position = "fixed";
+    ta.style.left = "-9999px";
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(ta);
+    if (!ok) throw new Error("The clipboard is not available.");
+  }
+}
 
 export function fmtDate(iso?: string | null): string {
   if (!iso) return "";

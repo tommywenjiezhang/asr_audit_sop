@@ -1,0 +1,18 @@
+# Keep the Docker build context small. The project is bind-mounted into the
+# container at run time, so none of this needs to ship with the image.
+node_modules/
+dist/
+.vite/
+src-tauri/target/
+src-tauri/gen/
+src-tauri/tauri.conf.windows.json
+asr-support-desk-target/
+target/
+outlook_worker/outlook_worker.exe
+outlook_worker/dist/
+outlook_worker/build/
+**/__pycache__/
+**/*.pyc
+installer/
+*.log
+.git/

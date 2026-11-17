@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
-  import { api, errMsg, fmtDate, type AppInfo, type FolderNode, type Settings } from "../lib/api";
+  import { api, errMsg, fmtDate, type AppInfo, type FolderNode, type Settings, type Staff, type StaffInput } from "../lib/api";
   import { app, toast } from "../lib/stores.svelte";
   import FolderTree from "../components/FolderTree.svelte";
 
@@ -14,14 +14,26 @@
   let busy = $state("");
   let internalText = $state("");
 
+  /** subtree of the monitored folder only (fast), so child folders can be chosen without loading the whole mailbox */
+  let sub = $state<FolderNode | null>(null);
+
   onMount(async () => {
     try {
       s = await api.settings();
+      s.selected_with_children ??= [];
       internalText = s.internal_senders.join("\n");
       sharedName = s.mailbox_name;
       info = await api.appInfo();
     } catch (e) { toast(errMsg(e), "error"); }
+    if (s?.folder) loadSubtree();
   });
+
+  async function loadSubtree() {
+    if (!s?.folder) return;
+    const f = s.folder;
+    const r = await step("subtree", () => api.folders(f.store_id, null, f.entry_id));
+    if (r) sub = r.root;
+  }
 
   async function step<T>(label: string, fn: () => Promise<T>): Promise<T | undefined> {
     busy = label;
@@ -50,6 +62,8 @@
     if (!s) return;
     s.folder = { store_id: n.store_id, entry_id: n.entry_id, path: n.path };
     s.selected_subfolders = [];
+    s.selected_with_children = [];
+    sub = n;
   }
 
   function findNode(n: FolderNode | null, id: string): FolderNode | null {
@@ -58,12 +72,103 @@
     for (const c of n.children) { const f = findNode(c, id); if (f) return f; }
     return null;
   }
-  const selectedNode = $derived(s?.folder ? findNode(tree, s.folder.entry_id) : null);
+  const selectedNode = $derived(s?.folder ? (findNode(tree, s.folder.entry_id) ?? (sub?.entry_id === s.folder.entry_id ? sub : null)) : null);
   function flatten(n: FolderNode): FolderNode[] { return n.children.flatMap((c) => [c, ...flatten(c)]); }
   function toggleSub(n: FolderNode, on: boolean) {
     if (!s) return;
     s.selected_subfolders = s.selected_subfolders.filter((f) => f.entry_id !== n.entry_id);
+    s.selected_with_children = s.selected_with_children.filter((id) => id !== n.entry_id);
     if (on) s.selected_subfolders.push({ store_id: n.store_id, entry_id: n.entry_id, path: n.path });
+  }
+  function toggleChildren(n: FolderNode, on: boolean) {
+    if (!s) return;
+    s.selected_with_children = s.selected_with_children.filter((id) => id !== n.entry_id);
+    if (on) s.selected_with_children.push(n.entry_id);
+  }
+  const isSelected = (n: FolderNode) => !!s?.selected_subfolders.some((f) => f.entry_id === n.entry_id);
+  /** the selected folder (with "and its subfolders") that already covers this folder, if any */
+  function coveredBy(n: FolderNode): string | null {
+    if (!s) return null;
+    const anc = s.selected_subfolders.find((f) => s!.selected_with_children.includes(f.entry_id) && n.path.startsWith(f.path + "/"));
+    return anc ? anc.path : null;
+  }
+  const scanSummary = $derived.by(() => {
+    if (!s?.folder) return "nothing selected";
+    if (s.subfolder_mode === "all") return `${s.folder.path} and all its subfolders`;
+    const parts = [`${s.folder.path} (this folder only)`];
+    if (s.subfolder_mode === "selected") {
+      for (const f of s.selected_subfolders) parts.push(s.selected_with_children.includes(f.entry_id) ? `${f.path} and all its subfolders` : `${f.path} (this folder only)`);
+    }
+    return parts.join(" + ");
+  });
+
+  // ---- completion (archive) folder: separate picker so it can live in another (shared) mailbox
+  let archTree = $state<FolderNode | null>(null);
+  let archShared = $state("");
+  let archCheck = $state<{ ok: boolean; text: string } | null>(null);
+  async function loadArchTree(storeId: string | null, shared: string | null, name: string) {
+    const r = await step("archfolders", () => api.folders(storeId, shared));
+    if (r && s) { archTree = r.root; s.archive_mailbox_name = name; }
+  }
+  function pickArchive(n: FolderNode) {
+    if (!s) return;
+    s.archive_folder = { store_id: n.store_id, entry_id: n.entry_id, path: n.path };
+    archCheck = null;
+  }
+  async function validateArchive() {
+    if (!s?.archive_folder) return;
+    const a = s.archive_folder;
+    const r = await step("validate", () => api.validateFolder(a.store_id, a.entry_id));
+    archCheck = r ? { ok: true, text: `OK: ${r.mailbox ? r.mailbox + " › " : ""}${r.path}` } : { ok: false, text: "Not usable - see the message shown." };
+    if (r && s.archive_folder) s.archive_folder.path = r.path;
+  }
+  // ---- staff assignment (stored in SQLite, saved per person - not with "Save Settings")
+  const emptyStaff = (): StaffInput => ({ id: null, display_name: "", email: "", mailbox_name: "", store_id: "", folder_entry_id: "", folder_path: "" });
+  let staffRows = $state<Staff[]>([]);
+  let me = $state<number | null>(null);
+  let editing = $state<StaffInput | null>(null);
+  let staffTree = $state<FolderNode | null>(null);
+  let staffMsg = $state<{ ok: boolean; text: string } | null>(null);
+  let accounts = $state<{ display_name: string; smtp: string }[]>([]);
+  const EMAIL_RE = /^[A-Za-z0-9._%+'-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}$/;
+
+  async function loadStaff() {
+    try { staffRows = await api.staffList(true); me = await api.currentStaff(); } catch (e) { toast(errMsg(e), "error"); }
+  }
+  onMount(loadStaff);
+  async function staffFolders() {
+    if (!s) return;
+    const name = editing?.mailbox_name || s.mailbox_name;
+    const r = await step("stafffolders", () => (s!.mailbox_store_id ? api.folders(s!.mailbox_store_id, null) : api.folders(null, name)));
+    if (r) { staffTree = r.root; if (editing && !editing.mailbox_name) editing.mailbox_name = s.mailbox_name; }
+  }
+  function pickStaffFolder(n: FolderNode) {
+    if (!editing) return;
+    editing.store_id = n.store_id; editing.folder_entry_id = n.entry_id; editing.folder_path = n.path;
+  }
+  async function saveStaff() {
+    if (!editing) return;
+    if (!EMAIL_RE.test(editing.email.trim())) { staffMsg = { ok: false, text: "Enter a valid email address." }; return; }
+    if (!editing.folder_entry_id) { staffMsg = { ok: false, text: "Choose the staff member's Outlook folder." }; return; }
+    const r = await step("staffsave", () => api.staffSave($state.snapshot(editing) as StaffInput));
+    if (r) { staffMsg = { ok: true, text: `Saved ${r.display_name}.` }; editing = null; staffTree = null; await loadStaff(); }
+  }
+  async function setActive(st: Staff, active: boolean) {
+    if (!active && !confirm(`Deactivate ${st.display_name}? Existing tickets and history keep the name; no new assignments are possible.`)) return;
+    if (await step("staffactive", () => api.staffSetActive(st.id, active))) await loadStaff();
+  }
+  async function setMe(v: string) {
+    const id = v ? Number(v) : null;
+    if ((await step("me", () => api.setCurrentStaff(id))) !== undefined) me = id;
+  }
+  async function loadAccounts() {
+    const r = await step("accounts", () => api.accounts());
+    if (r) accounts = r.accounts;
+  }
+
+  async function restorePrompt() {
+    if (!s) return;
+    s.prompt_instructions = await api.promptDefault();
   }
 
   async function saveSettings() {
@@ -115,7 +220,7 @@
       </div>
       {#if mailboxes.length}
         <div class="row wrap" style="margin-top:6px">
-          {#each mailboxes as m}<button class="small" class:primary={m.store_id === s.mailbox_store_id} onclick={() => pickMailbox(m)}>{m.display_name}</button>{/each}
+          {#each mailboxes as m}<button class="small" class:primary={m.store_id === s.mailbox_store_id} disabled={!!busy} onclick={() => pickMailbox(m)}>{m.display_name}</button>{/each}
         </div>
       {/if}
       {#if busy === "folders"}<div class="muted small">Reading folder list…</div>{/if}
@@ -130,16 +235,73 @@
             <label class="inline"><input type="radio" bind:group={s.subfolder_mode} value="selected" /> Include selected child folders</label>
             {#if s.subfolder_mode === "selected"}
               {#if selectedNode}
-                {#each flatten(selectedNode) as c}
-                  <label class="inline small" style="margin-left:22px"><input type="checkbox" checked={s.selected_subfolders.some((f) => f.entry_id === c.entry_id)} onchange={(e) => toggleSub(c, (e.target as HTMLInputElement).checked)} />{c.path}</label>
+                {#each flatten(selectedNode) as c (c.entry_id)}
+                  {@const cov = coveredBy(c)}
+                  <div class="row small" style="margin-left:{22 + 14 * (c.path.split('/').length - selectedNode.path.split('/').length - 1)}px">
+                    {#if cov}
+                      <label class="inline muted"><input type="checkbox" checked disabled />{c.name} <span class="badge grey">included via {cov}</span></label>
+                    {:else}
+                      <label class="inline"><input type="checkbox" checked={isSelected(c)} onchange={(e) => toggleSub(c, (e.target as HTMLInputElement).checked)} />{c.name}</label>
+                      {#if isSelected(c) && c.children.length}
+                        <label class="inline muted"><input type="checkbox" checked={s.selected_with_children.includes(c.entry_id)} onchange={(e) => toggleChildren(c, (e.target as HTMLInputElement).checked)} />and its subfolders ({flatten(c).length})</label>
+                      {/if}
+                    {/if}
+                  </div>
+                {:else}
+                  <div class="small muted" style="margin-left:22px">This folder has no child folders.</div>
                 {/each}
+              {:else if busy === "subtree"}
+                <div class="small muted" style="margin-left:22px">Reading child folders…</div>
               {:else}
-                <div class="small muted" style="margin-left:22px">Load the folder list to choose child folders. Selected: {s.selected_subfolders.map((f) => f.path).join(", ") || "none"}</div>
+                <div class="small muted" style="margin-left:22px">
+                  Child folders could not be read. Selected: {s.selected_subfolders.map((f) => f.path).join(", ") || "none"}
+                  <button class="link small" onclick={loadSubtree}>Retry</button>
+                </div>
               {/if}
             {/if}
           </div></div>
+        <div class="notice small" style="margin-top:6px"><b>Scanning:</b> {scanSummary}{#if s.archive_folder}. <b>Never scanned:</b> {s.archive_folder.path} (completion folder){/if}.
+          <div class="muted">Emails moved to other subfolders later are still found for Open Outlook Reply and Mark Done; they do not create new tickets.</div></div>
       {/if}
       <div class="small muted">Folders are remembered by their Outlook ID. If a folder is renamed or moved, the app tries to find it again by its path and tells you.</div>
+      <div class="field" style="margin-top:8px"><div class="lbl">Scan</div>
+        <div class="stack">
+          <label class="inline"><input type="radio" bind:group={s.scan_mode} value="all" /> All items in the folder (recommended)</label>
+          <label class="inline"><input type="radio" bind:group={s.scan_mode} value="unread" /> Unread items only</label>
+          <div class="small muted">Scanning never marks emails as read, never moves them and never changes their flags. With "Unread items only", an email someone already opened before the scan is not imported.</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h3>Completion Folder (Mark Done)</h3>
+      <p class="small muted">When you click <b>Mark Done</b>, the ticket's incoming emails are flagged complete in Outlook and moved to this folder. Nothing is deleted. Mark Done is not possible until a folder is chosen here.</p>
+      <div class="small">Completed emails go to: <b>{s.archive_folder ? `${s.archive_mailbox_name ? s.archive_mailbox_name + " › " : ""}${s.archive_folder.path}` : "not selected"}</b>
+        {#if archCheck}<span class="badge {archCheck.ok ? 'ok' : 'err'}">{archCheck.text}</span>{/if}</div>
+      <div class="row wrap" style="margin-top:8px">
+        <button onclick={loadMailboxes} disabled={!!busy}>{busy === "mailboxes" ? "Loading…" : "Find Mailboxes"}</button>
+        <span class="small muted">or shared mailbox:</span>
+        <input style="width:260px" bind:value={archShared} placeholder={s.mailbox_name} />
+        <button onclick={() => loadArchTree(null, archShared || s!.mailbox_name, archShared || s!.mailbox_name)} disabled={!!busy}>Open</button>
+        <button onclick={validateArchive} disabled={!!busy || !s.archive_folder}>{busy === "validate" ? "Checking…" : "Validate"}</button>
+      </div>
+      {#if mailboxes.length}
+        <div class="row wrap" style="margin-top:6px">
+          {#each mailboxes as m}<button class="small" disabled={!!busy} onclick={() => loadArchTree(m.store_id, null, m.display_name)}>{m.display_name}</button>{/each}
+        </div>
+      {/if}
+      {#if busy === "archfolders"}<div class="muted small">Reading folder list…</div>{/if}
+      {#if archTree}
+        <div class="treebox panel"><FolderTree node={archTree} selectedId={s.archive_folder?.entry_id ?? ""} onselect={pickArchive} /></div>
+      {/if}
+      <div class="small muted">The folder is remembered by mailbox and Outlook folder ID (not only its name) and is checked when you save. It must not be a monitored folder.</div>
+    </section>
+
+    <section class="panel">
+      <h3>Copilot Prompt</h3>
+      <p class="small muted">General instructions at the top of every copied prompt. The ticket details, SOP wording and the original email are added below them automatically.</p>
+      <textarea rows="10" bind:value={s.prompt_instructions}></textarea>
+      <div class="row" style="margin-top:6px"><button onclick={restorePrompt}>Restore Default</button><span class="small muted">Save Settings to apply.</span></div>
     </section>
 
     <section class="panel">
@@ -158,13 +320,64 @@
     </section>
 
     <section class="panel">
+      <h3>Staff Assignment</h3>
+      <p class="small muted">Each staff member has a name, the email address that receives handoff notifications, and their own Outlook folder. Assigning a ticket moves its emails into that folder. A folder also covers its subfolders unless another staff member has a more specific folder. Staff are stored in this computer's database.</p>
+      <table class="grid small">
+        <thead><tr><th>Name</th><th>Email</th><th>Folder</th><th></th></tr></thead>
+        <tbody>
+          {#each staffRows as st (st.id)}
+            <tr class:inactive={!st.active}>
+              <td>{st.display_name}{#if !st.active} <span class="badge grey">inactive</span>{/if}{#if me === st.id} <span class="badge">me</span>{/if}</td>
+              <td>{st.email}</td>
+              <td>{st.mailbox_name ? `${st.mailbox_name} › ` : ""}{st.folder_path}</td>
+              <td style="white-space:nowrap">
+                <button class="link small" onclick={() => { editing = { id: st.id, display_name: st.display_name, email: st.email, mailbox_name: st.mailbox_name ?? "", store_id: st.store_id, folder_entry_id: st.folder_entry_id, folder_path: st.folder_path }; staffMsg = null; }}>Edit</button>
+                {#if st.active}<button class="link small" onclick={() => setActive(st, false)}>Deactivate</button>{:else}<button class="link small" onclick={() => setActive(st, true)}>Reactivate</button>{/if}
+              </td>
+            </tr>
+          {:else}
+            <tr><td colspan="4" class="muted">No staff members yet.</td></tr>
+          {/each}
+        </tbody>
+      </table>
+      {#if editing}
+        <div class="panel staffform">
+          <div class="field"><div class="lbl">Display name</div><input bind:value={editing.display_name} placeholder="e.g. Wenjie" /></div>
+          <div class="field"><div class="lbl">Email address</div><div><input type="email" bind:value={editing.email} placeholder="name@doh.nj.gov" />
+            {#if editing.email && !EMAIL_RE.test(editing.email.trim())}<div class="small" style="color:var(--err)">Not a valid email address</div>{/if}</div></div>
+          <div class="field"><div class="lbl">Outlook folder</div>
+            <div>
+              <div class="row"><b class="small">{editing.folder_path ? `${editing.mailbox_name ? editing.mailbox_name + " › " : ""}${editing.folder_path}` : "not chosen"}</b>
+                <button class="small" onclick={staffFolders} disabled={!!busy}>{busy === "stafffolders" ? "Loading…" : "Choose folder…"}</button></div>
+              {#if staffTree}<div class="treebox panel"><FolderTree node={staffTree} selectedId={editing.folder_entry_id} onselect={pickStaffFolder} /></div>{/if}
+            </div></div>
+          <div class="row"><span class="grow"></span><button onclick={() => { editing = null; staffTree = null; }}>Cancel</button><button class="primary" onclick={saveStaff} disabled={!!busy}>Save staff member</button></div>
+        </div>
+      {:else}
+        <button style="margin-top:8px" onclick={() => { editing = emptyStaff(); staffMsg = null; }}>+ Add staff member</button>
+      {/if}
+      {#if staffMsg}<div class="small" style="color:{staffMsg.ok ? 'var(--ok)' : 'var(--err)'}">{staffMsg.text}</div>{/if}
+      <div class="field" style="margin-top:10px"><div class="lbl">I am</div>
+        <div><select style="width:240px" value={me == null ? "" : String(me)} onchange={(e) => setMe((e.target as HTMLSelectElement).value)}>
+          <option value="">— not set —</option>
+          {#each staffRows.filter((x) => x.active) as st (st.id)}<option value={String(st.id)}>{st.display_name}</option>{/each}
+        </select><div class="small muted">Used by the My Tickets shortcut on this computer.</div></div></div>
+      <div class="field"><div class="lbl">Send notifications from</div>
+        <div><div class="row"><select style="width:300px" bind:value={s.notify_account}>
+            <option value="">Outlook's default account</option>
+            {#if s.notify_account && !accounts.some((a) => a.smtp === s!.notify_account)}<option value={s.notify_account}>{s.notify_account}</option>{/if}
+            {#each accounts as a}<option value={a.smtp}>{a.display_name} ({a.smtp})</option>{/each}
+          </select><button class="small" onclick={loadAccounts} disabled={!!busy}>Find accounts</button></div>
+          <div class="small muted">An account you are allowed to send from. Shared-mailbox "Send As" is not assumed. Save Settings to apply. Notifications go only to the assigned staff member, never to the school.</div></div></div>
+    </section>
+
+    <section class="panel">
       <h3>Ticket Preferences</h3>
       <div class="field"><div class="lbl">Your name</div><input bind:value={s.staff_name} placeholder="Recorded in ticket history; available as {'{{staff_name}}'}" /></div>
       <div class="field"><div class="lbl">Default assigned staff</div><input bind:value={s.default_assigned_staff} /></div>
       <div class="field"><div class="lbl">ASR deadline text</div><input bind:value={s.asr_deadline} /></div>
       <div class="field"><div class="lbl">Internal senders</div><div><textarea rows="3" bind:value={internalText} placeholder="one per line, e.g. someone@doh.nj.gov or @doh.nj.gov"></textarea><div class="small muted">Emails from these addresses never create tickets (they are linked to an existing conversation if one exists).</div></div></div>
       <div class="field"><div class="lbl">Duplicate check window</div><div class="row"><input type="number" min="1" style="width:90px" bind:value={s.duplicate_window_days} /> days</div></div>
-      <div class="field"><div class="lbl">Outlook drafts</div><label class="inline"><input type="checkbox" bind:checked={s.open_outlook_draft_after_create} /> Open the draft in Outlook after creating it</label></div>
     </section>
 
     <section class="panel">
@@ -172,6 +385,7 @@
       {#if info}
         <div class="small muted">Version {info.version} · database schema v{info.schema_version} · template catalog v{info.catalog_version} ({info.template_count} templates) · backend startup {info.startup_ms} ms</div>
         <div class="small muted">Data folder: <code>{info.data_dir}</code> · Logs: <code>{info.log_dir}</code></div>
+        {#if info.worker}<div class="small muted">Outlook worker: <code>{info.worker}</code></div>{/if}
       {/if}
       <div class="row" style="margin-top:8px">
         <button onclick={backup} disabled={!!busy}>Back Up Database…</button>
@@ -185,5 +399,7 @@
   .page { height: 100%; padding: 16px; }
   section { padding: 12px; margin-top: 12px; }
   .treebox { max-height: 300px; overflow: auto; padding: 6px; margin-top: 8px; }
+  .staffform { padding: 10px; margin-top: 8px; }
+  tr.inactive td { color: var(--muted); }
   details { margin-top: 6px; }
 </style>
