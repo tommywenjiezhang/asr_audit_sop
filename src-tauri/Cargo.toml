@@ -1,0 +1,52 @@
+[package]
+name = "asr-support-desk"
+version = "1.0.0"
+description = "ASR/Audit Support Desk - Outlook email monitor and ticket manager"
+edition = "2021"
+rust-version = "1.80"
+
+[lib]
+name = "asr_support_desk_lib"
+crate-type = ["rlib"]
+
+[[bin]]
+name = "asr-support-desk"
+path = "src/main.rs"
+required-features = ["app"]
+
+[features]
+default = ["app"]
+# "app" = the Tauri desktop shell. Core logic (and its tests) builds without it:
+#   cargo test --no-default-features
+app = ["dep:tauri", "dep:tauri-build", "dep:tauri-plugin-dialog", "dep:tauri-plugin-autostart", "dep:tauri-plugin-single-instance", "dep:tracing-appender"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [], optional = true }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"], optional = true }
+tauri-plugin-dialog = { version = "2", optional = true }
+tauri-plugin-autostart = { version = "2", optional = true }
+tauri-plugin-single-instance = { version = "2", optional = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.37", features = ["bundled", "backup"] }
+tokio = { version = "1", features = ["time", "process", "sync", "macros", "rt-multi-thread", "io-util"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = { version = "0.2", optional = true }
+regex = "1"
+chrono = { version = "0.4", features = ["serde"] }
+include_dir = "0.7"
+ammonia = "4"
+thiserror = "2"
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

@@ -1,0 +1,115 @@
+<script lang="ts">
+  import { onMount } from "svelte";
+  import { listen } from "@tauri-apps/api/event";
+  import { api, errMsg, fmtDate, type SyncStatus } from "./lib/api";
+  import { app, loadCatalog, toast } from "./lib/stores.svelte";
+  import Tickets from "./pages/Tickets.svelte";
+  import Templates from "./pages/Templates.svelte";
+  import Reports from "./pages/Reports.svelte";
+  import SettingsPage from "./pages/Settings.svelte";
+
+  type Page = "tickets" | "templates" | "reports" | "settings";
+  let page = $state<Page>("tickets");
+  let group = $state("open");
+  let ready = $state(false);
+  let loadError = $state("");
+
+  const groups: [string, string][] = [
+    ["all", "All Tickets"], ["open", "Open"], ["new", "New"], ["review", "Needs Review"],
+    ["progress", "In Progress"], ["waiting", "Waiting"], ["done", "Resolved / Closed"],
+  ];
+
+  onMount(() => {
+    const unsubs: (() => void)[] = [];
+    (async () => {
+      try {
+        await loadCatalog();
+        app.sync = await api.syncStatus();
+        ready = true;
+      } catch (e) {
+        loadError = errMsg(e);
+      }
+      unsubs.push(await listen<SyncStatus>("sync-status", (ev) => (app.sync = { ...app.sync, ...ev.payload })));
+      unsubs.push(await listen("tickets-changed", () => app.ticketsVersion++));
+    })();
+    return () => unsubs.forEach((u) => u());
+  });
+
+  async function checkNow() {
+    try {
+      const r = await api.syncNow();
+      const rep = r.report;
+      toast(`Checked Outlook: ${rep.new_messages} new email(s), ${rep.created_tickets} new ticket(s), ${rep.updated_tickets} updated.`, "ok");
+      for (const w of r.warnings) toast(w, "info");
+      app.ticketsVersion++;
+    } catch (e) {
+      toast(errMsg(e), "error");
+    }
+    app.sync = await api.syncStatus();
+  }
+</script>
+
+<div class="shell">
+  <nav class="side">
+    <div class="brand">ASR/Audit<br /><span>Support Desk</span></div>
+    <button class="nav" class:active={page === "tickets"} onclick={() => (page = "tickets")}>Tickets</button>
+    {#if page === "tickets"}
+      {#each groups as [g, label]}
+        <button class="sub" class:active={group === g} onclick={() => (group = g)}>{label}</button>
+      {/each}
+    {/if}
+    <button class="nav" class:active={page === "templates"} onclick={() => (page = "templates")}>Email Templates</button>
+    <button class="nav" class:active={page === "reports"} onclick={() => (page = "reports")}>Reports</button>
+    <button class="nav" class:active={page === "settings"} onclick={() => (page = "settings")}>Settings</button>
+    <div class="grow"></div>
+    <div class="syncbox small">
+      <div><b>Folder:</b> {app.sync?.folder_display ?? "not selected"}</div>
+      <div><b>Last check:</b> {fmtDate(app.sync?.last_success_at) || "never"}</div>
+      {#if app.sync?.next_run_at}<div><b>Next:</b> {fmtDate(app.sync.next_run_at)}</div>{/if}
+      {#if app.sync?.last_error}<div class="errline" title={app.sync.last_error}>⚠ {app.sync.last_error}</div>{/if}
+      <button class="primary" style="width:100%;margin-top:6px" disabled={app.sync?.running} onclick={checkNow}>
+        {app.sync?.running ? "Checking…" : "Check Now"}
+      </button>
+    </div>
+  </nav>
+
+  <main>
+    {#if loadError}
+      <div class="notice err" style="margin:16px">Could not start: {loadError}</div>
+    {:else if !ready}
+      <div class="muted" style="padding:16px">Loading…</div>
+    {:else if page === "tickets"}
+      <Tickets {group} />
+    {:else if page === "templates"}
+      <Templates />
+    {:else if page === "reports"}
+      <Reports />
+    {:else}
+      <SettingsPage />
+    {/if}
+  </main>
+
+  {#if app.toast}
+    <div class="toast {app.toast.kind}" role="status">{app.toast.text}<button class="link" onclick={() => (app.toast = null)}>✕</button></div>
+  {/if}
+</div>
+
+<style>
+  .shell { display: flex; height: 100%; }
+  .side { width: 190px; flex: none; background: #17324d; color: #dce6f0; display: flex; flex-direction: column; padding: 10px 8px; gap: 2px; }
+  .brand { font-weight: 700; font-size: 15px; padding: 4px 8px 12px; color: #fff; line-height: 1.2; }
+  .brand span { font-weight: 400; font-size: 13px; color: #a9c1d9; }
+  .side button { background: none; border: none; color: inherit; text-align: left; height: 30px; border-radius: 5px; }
+  .side button.nav { font-weight: 600; }
+  .side button.sub { padding-left: 22px; height: 26px; font-size: 12px; color: #b8cadc; }
+  .side button.active { background: #2b5279; color: #fff; }
+  .side button:hover { background: #24476b; }
+  .side button.primary { background: #3a77b5; color: #fff; text-align: center; }
+  .grow { flex: 1; }
+  .syncbox { background: #0f2539; border-radius: 6px; padding: 8px; line-height: 1.5; word-break: break-word; }
+  .errline { color: #ffb4ab; max-height: 60px; overflow: hidden; }
+  main { flex: 1; min-width: 0; height: 100%; overflow: hidden; }
+  .toast { position: fixed; right: 16px; bottom: 16px; max-width: 460px; padding: 10px 12px; border-radius: 6px; background: #17324d; color: #fff; box-shadow: 0 4px 14px rgba(0,0,0,.25); z-index: 60; display: flex; gap: 8px; align-items: start; }
+  .toast.ok { background: #245e3c; } .toast.error { background: #8c1d18; }
+  .toast button { color: #fff; }
+</style>
