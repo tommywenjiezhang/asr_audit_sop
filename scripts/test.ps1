@@ -13,6 +13,12 @@ Write-Host "== Frontend type check ==" -ForegroundColor Cyan
 npx svelte-check --tsconfig ./tsconfig.json
 if ($LASTEXITCODE -ne 0) { $failed += "svelte-check" }
 
+Write-Host "== Production frontend bundle contract ==" -ForegroundColor Cyan
+npm run build
+if ($LASTEXITCODE -ne 0) { $failed += "vite-build" }
+python scripts\verify_frontend_bundle.py
+if ($LASTEXITCODE -ne 0) { $failed += "frontend-bundle" }
+
 Write-Host "== Rust tests ==" -ForegroundColor Cyan
 Push-Location src-tauri
 cargo test --no-default-features
