@@ -205,7 +205,7 @@ The approved SOP wording for each issue is still kept in **SOP Templates**, and 
 
 ## 6a. Assigning tickets (Outlook moves and handoff)
 
-> **With the shared team database**, use **Claim / Take over** for now. Assign/Reassign (which moves emails into a staff folder and sends a handoff email) returns in the next release, when moves are reserved in the shared database first so two computers can never move or notify twice. On a **Standalone** computer, Assign works as described below.
+> **With the shared team database (1.2.0)** Assign/Reassign first *reserves* the case's Outlook work in the shared database and changes the owner there in the same step. Only one computer can hold that reservation: if a colleague is already assigning or archiving the same case you see *"… is already running an assignment in Outlook for this case"* and nothing is changed. If the owner changed after you opened the case, the assignment is refused so you can review first. Assign needs the shared database to be reachable (Claim works offline).
 
 1. Open a ticket and click **Assign** / **Reassign**, or tick several tickets in the list and click **Assign selected**.
 2. Choose the person. The dialog shows their notification email, destination folder, number of tickets and emails, and whether a notification will be sent. Add an optional handoff note and click **Assign**.
@@ -221,7 +221,18 @@ Problems:
 - Reassigning to the **same person** sends no new email. A **Done** ticket must be **Reopened** before it can be assigned.
 - If emails of one ticket end up in two people's folders, the ticket shows **Ownership conflict** and the owner is not changed automatically.
 
-**Team Overview** (left menu) counts tickets per person. Unassigned / Assigned / In Progress come from emails confirmed in your selected folders; Done counts are this computer's records for the chosen dates. Staff folders outside your selected folders are marked *not reconciled*.
+**Team Overview** (left menu) › **Workload** shows, for the whole team: open, unassigned and Review cases, cases older than N days, cases without activity, pending Outlook work, sync conflicts and changes not yet shared, then per person Assigned / In Progress / Review / unresolved / older / oldest age / Done in 7 and 30 days, and the oldest open cases. **Staff activity** lists what each person did recently. **Folder report** is the earlier per-folder count of your selected Outlook folders.
+
+## 6c. Kanban, bulk actions, related cases and combining cases
+
+- **Kanban** (left menu): the team's cases in five columns (Unassigned, Assigned, In Progress, Review, Done — Done for the last 7/14/30 days). Filter by owner, issue type, school, search text or *Pending Outlook work*. Cards show the age, last activity, sync state and an *Outlook* badge when Outlook work is unfinished. **Drag a card** to change the status; the same checks as the buttons apply (Unassigned → Assigned = Claim, → In Progress = Start Work (claiming first if needed) / Review handled / Reopen, → Review = Flag for Review, → Done = Mark Done, → Unassigned = Clear owner). A refused move leaves the card where it was. Dragging an owned case to Assigned opens Assign / Reassign.
+- **Bulk actions**: tick cases in the list (or *Select all shown*) or on Kanban. The bar offers Claim, Assign / Reassign, Start Work, Flag for Review, Mark Done, Archive in Outlook, and under *More* Take over, Clear owner, Review handled, Reopen and **Export selected (CSV)**. Every case is handled and reported separately; **Retry failed** runs the action again only for the failed cases.
+- **Related cases** (in a case, below the emails): suggestions with their reasons (same Outlook conversation, same NJIIS ID, same sender, similar subject, same issue type, possible duplicate). Nothing is linked or combined automatically. **Link** keeps both cases separate but connected; **Combine…** opens the preview.
+- **Combine cases…** (in a case): add the tickets that belong to this case, check the preview (emails, notes, schools, issue types, resulting status, anything that blocks it — e.g. different owners) and click **Combine**. The remaining case keeps every email, note, school, owner period and history entry; the combined tickets' references keep working.
+- **Move to another case…** (on an email): when an email was put into the wrong case. The email itself is not changed in Outlook.
+- **Open in Outlook** (on an email): shows the original email in Outlook (nothing is changed).
+- **Activity** (bottom of a case): the complete timeline — emails, notes, owners, Done decisions, Outlook runs and every change — with filters; *Change log* shows the raw history.
+- **Conflicts** (left menu): every synchronization conflict of this computer with the value you started from, your value and the shared value. **Keep shared value** or **Use my value** (sent again against the latest shared value). Conflicts never change a case's status.
 
 **Several computers:** with the shared database, cases, owners, statuses, notes and history are shared (see *Settings › Shared Database* and [SHARED_DATABASE.md](SHARED_DATABASE.md)). Moving an email into someone's folder by hand never changes the owner by itself once the shared database is connected; it is shown on the email. T-numbers are local to each computer; the *ASR-…* reference is the same everywhere.
 
@@ -237,6 +248,7 @@ Left menu › **Diagnostics** (also **Open Diagnostics** in Settings › Shared 
 - **Copy Log** copies the filtered list as plain text; tick events and use **Copy Selected** for just those. Paste it into an email or Teams message to the developer. If the clipboard is blocked, the text is shown so you can copy it by hand.
 - Email addresses, phone numbers, school and NJIIS IDs, subjects, Windows user names and connection strings are removed before anything is saved or copied. Email text and Copilot prompts are never logged. Diagnostics are kept on this computer (the most recent few thousand events) and are separate from the case history.
 - A problem with Diagnostics itself never stops you from saving or synchronizing.
+- **Tools**: *Test Database Connection*, *Test Outlook Connection*, *Sync Now / Retry*, *Check Shared Integrity* (read-only referential checks of the shared database), *Back Up Shared Database* (byte-verified copy next to the file) and *Export Log to File…* (the same redacted text as Copy Log).
 
 ---
 

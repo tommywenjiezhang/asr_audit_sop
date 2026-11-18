@@ -45,7 +45,8 @@ if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator))
 $stateFile = Join-Path $Root "instances.json"
 if ($Stop) {
     if (Test-Path $stateFile) {
-        foreach ($i in (Get-Content $stateFile -Raw | ConvertFrom-Json | Where-Object { -not $Only -or $_.name -eq $Only })) {
+        # (parentheses: Windows PowerShell 5.1 passes a JSON array down the pipeline as ONE object)
+        foreach ($i in (@((Get-Content $stateFile -Raw | ConvertFrom-Json)) | Where-Object { -not $Only -or $_.name -eq $Only })) {
             try { Stop-Process -Id $i.pid -ErrorAction Stop; Write-Host "Stopped $($i.name) (pid $($i.pid))" } catch { Write-Host "$($i.name) (pid $($i.pid)) was not running" }
         }
     }
@@ -121,7 +122,7 @@ $keys = "ASR_APP_DATA_DIR", "ASR_TEST_MODE", "ASR_PROFILE_NAME", "ASR_TEST_STAFF
 $saved = @{}
 foreach ($k in $keys) { $saved[$k] = [Environment]::GetEnvironmentVariable($k, "Process") }
 $started = @()
-if ($Only -and (Test-Path $stateFile)) { $started = @(Get-Content $stateFile -Raw | ConvertFrom-Json | Where-Object { $_.name -ne $Only }) }
+if ($Only -and (Test-Path $stateFile)) { $started = @(@((Get-Content $stateFile -Raw | ConvertFrom-Json)) | Where-Object { $_.name -ne $Only }) }
 try {
     foreach ($p in ($profiles | Where-Object { -not $Only -or $_.name -eq $Only })) {
         $dir = Join-Path $Root $p.name
@@ -142,7 +143,7 @@ try {
 } finally {
     foreach ($k in $keys) { [Environment]::SetEnvironmentVariable($k, $saved[$k], "Process") }
 }
-$started | ConvertTo-Json | Set-Content -Encoding UTF8 $stateFile
+ConvertTo-Json @($started) | Set-Content -Encoding UTF8 $stateFile
 Write-Host ""
 Write-Host "Both instances share: $SharedDb"
 Write-Host "Mock Outlook mailbox: $mock (journal.jsonl records every move/flag/send request)"

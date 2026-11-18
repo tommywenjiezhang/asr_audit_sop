@@ -39,7 +39,7 @@ fn init_logging(log_dir: &std::path::Path) -> Option<tracing_appender::non_block
         .build(log_dir)
         .ok()?;
     let (nb, guard) = tracing_appender::non_blocking(appender);
-    let filter = tracing_subscriber::EnvFilter::try_from_env("ASR_DESK_LOG").unwrap_or_else(|_| "info".into());
+    let filter = tracing_subscriber::EnvFilter::try_from_env("ASR_DESK_LOG").unwrap_or_else(|_| "info,odbc_api::handles::logging=error".into());
     tracing_subscriber::fmt().with_env_filter(filter).with_writer(nb).with_ansi(false).try_init().ok()?;
     Some(guard)
 }

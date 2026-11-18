@@ -6,23 +6,27 @@ A lightweight Windows desktop app for the ASR/Audit support mailbox. It:
 - turns emails into **support cases** (one case can hold several schools, issue types and emails) with workflow statuses **Unassigned / Assigned / In Progress / Review / Done** and one current **owner**
 - shares cases, owners, notes and history between computers through a **shared Microsoft Access database** on a network share, while always saving locally first (works offline; see [docs/SHARED_DATABASE.md](docs/SHARED_DATABASE.md))
 - **Claim / Take over** change ownership without touching Outlook; **Mark Done** is a recorded staff decision (no sent-reply verification); a new reply to a Done case moves it to **Review**
-- **Diagnostics** with a copyable, redacted event log
+- **Kanban board**, **bulk actions** with per-case results, **Team Overview** (workload, aging, pending Outlook work, conflicts, staff activity), **Conflicts** review page
+- **Related cases** suggestions and links, **Combine cases** with a preview, **move an email to another case**, a complete **activity timeline**
+- **Diagnostics** with a copyable/exportable, redacted event log, connection tests, shared integrity check and verified backups
 - assigns tickets to staff: moves the ticket's emails into the person's Outlook folder and emails them a handoff summary
 - shows **Current Tickets** (emails now in the selected folders), **Awaiting Verification** and **Ticket History**, verified against Outlook on every check
 - extracts issue types (several per email), error messages, school details (several schools per email, with NJIIS and other IDs, address, municipality, county and ZIP) and sender details (title, phone, extension)
 - builds **one plain-text Copilot prompt** per ticket from the saved data, the approved SOP wording and the original email
 
-**Workflow:** Scan → **Claim** → Review case → **Copy Prompt** → paste into Microsoft Copilot → **Open Outlook Reply** → paste Copilot's reply and send it yourself → **Mark Done** (decision saved at once) → Outlook archiving of the covered emails (immediately on a standalone computer; **Archive in Outlook** after the shared database confirmed the decision).
+**Workflow:** Scan → **Claim** → Review case → **Copy Prompt** → paste into Microsoft Copilot → **Open Outlook Reply** → paste Copilot's reply and send it yourself → **Mark Done** (decision saved at once) → Outlook archiving of the covered emails (immediately on a standalone computer; with the shared database as soon as it confirms the decision — automatically, also after working offline).
 
 What the app does in Outlook:
 
 - **Scanning and verification** only read. They never mark emails as read, move them or change their flags.
 - **Open Outlook Reply** only shows Outlook's own Reply window. Nothing is inserted, saved or sent.
 - **Assign / Reassign** moves the ticket's incoming emails into the staff member's folder (no flag or read-state change), then sends **one handoff email to that staff member only**. This is the only email the app sends by itself; replies to schools are always sent by staff.
-- **Mark Done** records the decision; the incoming emails it covered are then flagged *Complete* and moved to the completion folder (standalone: right away; shared database: when you click **Archive in Outlook** after the decision is confirmed). Emails that arrived later are never archived under an older decision.
+- **Mark Done** records the decision; the incoming emails it covered are then flagged *Complete* and moved to the completion folder (standalone: right away; shared database: once the decision is confirmed there, holding the case's shared reservation). Emails that arrived later are never archived under an older decision.
 - **Claim**, **Take over**, **Review**, notes and **Add to existing case** never change Outlook.
-- With the shared database, **Assign / Reassign** (Outlook moves + handoff) is withheld until the next phase adds shared move reservations (P1); on a standalone computer it works as before.
+- With the shared database, every Outlook move and handoff is coordinated through a **shared reservation** (schema v2): only one computer can assign or archive a case at a time, the owner changes in the same step, and a handoff is claimed there before it is sent, so it is never sent twice.
 - Nothing is ever deleted, and there is no AI/API integration. You paste the prompt into Copilot yourself.
+
+Development/testing: two instances of the app can run side by side with separate profiles against the same shared database — see [docs/MULTIUSER_TESTING.md](docs/MULTIUSER_TESTING.md) (`scripts\launch_multiuser_test.ps1`, `node scripts\multiuser\run-tests.mjs`). Staff UAT: [docs/UAT_CHECKLIST.md](docs/UAT_CHECKLIST.md).
 
 For staff, the **illustrated step-by-step guide** is [docs/guide/ASR-Support-Desk-User-Guide.html](docs/guide/ASR-Support-Desk-User-Guide.html): one HTML file with a screenshot for every step, using fictional demo data. Rebuild it with `scripts\build-guide.ps1`. See [docs/USER_GUIDE.md](docs/USER_GUIDE.md) for the shorter text reference. See [docs/TEMPLATE_COVERAGE.md](docs/TEMPLATE_COVERAGE.md) for how each template maps to the SOP, and [docs/BUILD_WINDOWS.md](docs/BUILD_WINDOWS.md) for building.
 
