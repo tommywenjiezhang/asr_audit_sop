@@ -17,9 +17,9 @@ use std::path::Path;
 
 /// Shared schema version this app writes. Older databases must be upgraded deliberately
 /// (`upgrade_schema`); newer ones are refused for writing.
-pub const SHARED_SCHEMA_VERSION: i64 = 1;
+pub const SHARED_SCHEMA_VERSION: i64 = 2;
 /// Protocol version of the operations this app submits. A database may demand a minimum.
-pub const CLIENT_PROTOCOL: i64 = 1;
+pub const CLIENT_PROTOCOL: i64 = 2;
 pub const ACCESS_DRIVER: &str = "Microsoft Access Driver (*.mdb, *.accdb)";
 pub const DEFAULT_SHARED_PATH: &str =
     r"\\epi-qb-5\VPD_Shared\PgmDocs\Assessment and Coverage\Annual Immunization Status Report\ASR Master List Revamp--2023\asr_email_support.accdb";
@@ -666,8 +666,27 @@ CREATE TABLE ChangeFeed (seq {AUTO}, ticket_id TEXT(36), entity_type TEXT(16) NO
 CREATE INDEX ix_ChangeFeed_ticket ON ChangeFeed (ticket_id)
 "#;
 
+/// Shared schema v2 (1.2.0): coordination of Outlook side effects between computers.
+/// `OutlookOperations` holds one row per Assign/Reassign or Archive run. While a run is active its
+/// `active_key` is "<ticket id>|<kind>" (unique), so only one computer can hold the reservation for a case
+/// and kind; a finished row's key becomes its own id. The row also records the moves and the handoff state
+/// so a handoff is never sent twice from two computers.
+const SCHEMA_V2: &str = r#"
+CREATE TABLE OutlookOperations (outlook_op_id TEXT(36) NOT NULL CONSTRAINT pk_OutlookOperations PRIMARY KEY, ticket_id TEXT(36) NOT NULL, op_kind TEXT(16) NOT NULL, active_key TEXT(80) NOT NULL, from_staff_id TEXT(36), to_staff_id TEXT(36), device_id TEXT(36), device_name TEXT(128), staff_id TEXT(36), staff_name TEXT(100), op_state TEXT(16) NOT NULL, email_ids {MEMO}, moved_ids {MEMO}, notify_state TEXT(16), notify_id TEXT(100), notify_device TEXT(36), notify_at TEXT(30), last_error {MEMO}, note {MEMO}, created_at TEXT(30) NOT NULL, updated_at TEXT(30) NOT NULL, expires_at TEXT(30), finished_at TEXT(30), CONSTRAINT fk_OutlookOperations_ticket FOREIGN KEY (ticket_id) REFERENCES Tickets (ticket_id));;
+CREATE UNIQUE INDEX ux_OutlookOperations_active ON OutlookOperations (active_key);;
+CREATE INDEX ix_OutlookOperations_ticket ON OutlookOperations (ticket_id);;
+CREATE INDEX ix_TicketRelations_a ON TicketRelations (ticket_a);;
+CREATE INDEX ix_TicketRelations_b ON TicketRelations (ticket_b)
+"#;
+
 /// Per-version DDL steps; index = target version - 1.
-const SCHEMA_STEPS: &[&str] = &[SCHEMA_V1];
+const SCHEMA_STEPS: &[&str] = &[SCHEMA_V1, SCHEMA_V2];
+
+/// Tables every compatible database of the current schema must contain (integrity check).
+pub const REQUIRED_TABLES: &[&str] = &[
+    "DatabaseMetadata", "SharedSettings", "Staff", "Devices", "Mailboxes", "Tickets", "TicketAliases", "Emails", "TicketEmails", "TicketIssueTypes", "TicketSchools",
+    "TicketFields", "TicketNotes", "OwnershipHistory", "CompletionHistory", "ActivityLog", "ProcessedOperations", "SyncConflicts", "TicketRelations", "ChangeFeed", "OutlookOperations",
+];
 
 fn ddl(d: Dialect, block: &str) -> Vec<String> {
     let mut s = block.to_string();
@@ -774,15 +793,62 @@ pub fn upgrade_schema(c: &mut dyn SharedConn, actor: &str) -> SResult<DbIdentity
     set_meta(c, "maintenance", "1")?;
     set_meta(c, "maintenance_message", &format!("Schema upgrade by {actor}"))?;
     let d = c.dialect();
+    // repair: tables/indexes of the versions already recorded that are missing (an interrupted setup)
+    for v in 0..(id.schema_version as usize).min(SCHEMA_STEPS.len()) {
+        for stmt in ddl(d, SCHEMA_STEPS[v]) {
+            exec_ddl_idempotent(c, &stmt)?;
+        }
+    }
     for v in (id.schema_version as usize)..SCHEMA_STEPS.len() {
         for stmt in ddl(d, SCHEMA_STEPS[v]) {
-            c.exec(&stmt, &[])?;
+            exec_ddl_idempotent(c, &stmt)?;
         }
         set_meta(c, "schema_version", &(v as i64 + 1).to_string())?;
+        set_meta(c, "schema_upgraded_at", &crate::db::now())?;
+        set_meta(c, "schema_upgraded_by", actor)?;
     }
+    // older app versions must not write to a database whose new tables they do not know
+    set_meta(c, "min_client_protocol", &CLIENT_PROTOCOL.to_string())?;
     set_meta(c, "maintenance", "0")?;
     set_meta(c, "maintenance_message", "")?;
     identity(c)
+}
+
+/// Run one DDL statement so that a re-run after an interruption is harmless: an existing table is
+/// skipped, an index that already exists is accepted. Existing data is never dropped or altered.
+pub fn exec_ddl_idempotent(c: &mut dyn SharedConn, stmt: &str) -> SResult<bool> {
+    let words: Vec<&str> = stmt.split_whitespace().collect();
+    if words.len() > 2 && words[0].eq_ignore_ascii_case("CREATE") && words[1].eq_ignore_ascii_case("TABLE") {
+        let name = words[2].trim_matches(|ch: char| ch == '(' || ch == '[' || ch == ']');
+        if c.table_exists(name)? {
+            return Ok(false);
+        }
+        c.exec(stmt, &[])?;
+        return Ok(true);
+    }
+    match c.exec(stmt, &[]) {
+        Ok(_) => Ok(true),
+        Err(e) => {
+            let m = e.message.to_lowercase();
+            let is_index = words.iter().take(3).any(|w| w.eq_ignore_ascii_case("INDEX"));
+            if is_index && (m.contains("already") || m.contains("exists") || m.contains("duplicate")) {
+                Ok(false)
+            } else {
+                Err(e)
+            }
+        }
+    }
+}
+
+/// Tables of the current schema that are missing from a connected database.
+pub fn missing_tables(c: &mut dyn SharedConn) -> SResult<Vec<String>> {
+    let mut out = vec![];
+    for t in REQUIRED_TABLES {
+        if !c.table_exists(t)? {
+            out.push(t.to_string());
+        }
+    }
+    Ok(out)
 }
 
 pub fn set_meta(c: &mut dyn SharedConn, key: &str, value: &str) -> SResult<()> {
@@ -1152,11 +1218,64 @@ pub mod tests {
         // simulate a v0 database that is missing nothing (DDL already present) -> upgrade must not destroy data
         let mut c = open(&p, false).unwrap();
         c.exec("INSERT INTO Staff (staff_id, display_name, is_active, row_version, created_at, updated_at) VALUES ('s1','Aaron',1,1,'x','x')", &[]).unwrap();
-        // re-running DDL for v1 on an existing v1 layout fails; the upgrade aborts and leaves maintenance on
-        assert!(upgrade_schema(c.as_mut(), "admin").is_err());
-        assert_eq!(identity(c.as_mut()).unwrap().maintenance, true, "a failed upgrade leaves the database in maintenance (writers blocked)");
+        // the DDL is idempotent: tables that exist are kept as they are, nothing is dropped
+        let id = upgrade_schema(c.as_mut(), "admin").unwrap();
+        assert_eq!(id.schema_version, SHARED_SCHEMA_VERSION);
+        assert!(!id.maintenance, "maintenance is cleared after a successful upgrade");
         let n = c.query("SELECT COUNT(*) FROM Staff", &[]).unwrap();
         assert_eq!(col_i(&n[0], 0), 1, "data kept");
+        assert!(missing_tables(c.as_mut()).unwrap().is_empty());
+    }
+
+    /// A v1 database (as initialized on 2026-11-18) is upgraded to v2 in place: data kept, new table
+    /// added, older apps locked out of writing; an interrupted upgrade (table created, version not yet
+    /// recorded) is completed by running it again.
+    fn v1_upgrade_scenario(p: &std::path::Path) {
+        let mut c = open(p, false).unwrap();
+        // make it a v1 database: drop the v2 table and record v1
+        c.exec("DROP TABLE OutlookOperations", &[]).unwrap();
+        set_meta(c.as_mut(), "schema_version", "1").unwrap();
+        set_meta(c.as_mut(), "min_client_protocol", "1").unwrap();
+        c.exec("INSERT INTO Staff (staff_id, display_name, is_active, row_version, created_at, updated_at) VALUES ('s1','Aaron',1,1,'x','x')", &[]).unwrap();
+        drop(c);
+        assert_eq!(probe(p, &device("A")).compatibility, "upgrade_required");
+        let mut c = open(p, false).unwrap();
+        assert_eq!(missing_tables(c.as_mut()).unwrap(), vec!["OutlookOperations".to_string()]);
+        // interrupted run: the table exists but the version was not recorded yet
+        for stmt in ddl(c.dialect(), SCHEMA_V2).into_iter().take(1) {
+            c.exec(&stmt, &[]).unwrap();
+        }
+        let id = upgrade_schema(c.as_mut(), "admin").unwrap();
+        assert_eq!((id.schema_version, id.min_client_protocol, id.maintenance), (2, CLIENT_PROTOCOL, false));
+        assert!(missing_tables(c.as_mut()).unwrap().is_empty());
+        assert_eq!(col_i(&c.query("SELECT COUNT(*) FROM Staff", &[]).unwrap()[0], 0), 1, "data kept");
+        // the active-reservation key is unique
+        let ins = "INSERT INTO OutlookOperations (outlook_op_id, ticket_id, op_kind, active_key, op_state, created_at, updated_at) VALUES (?, 't1', 'assign', 't1|assign', 'reserved', 'x', 'x')";
+        c.exec("INSERT INTO Tickets (ticket_id, ticket_ref, ticket_status, row_version, created_at, updated_at) VALUES ('t1','ASR-T1','Unassigned',1,'x','x')", &[]).unwrap();
+        c.exec(ins, &["o1".into()]).unwrap();
+        assert_eq!(c.exec(ins, &["o2".into()]).unwrap_err().kind, ErrKind::Constraint);
+        // re-running is a no-op
+        assert_eq!(upgrade_schema(c.as_mut(), "admin").unwrap().schema_version, 2);
+        drop(c);
+        let r = probe(p, &device("A"));
+        assert_eq!((r.compatibility.as_str(), r.writable), ("ok", true));
+    }
+
+    #[test]
+    fn v1_database_upgrades_to_v2_in_place() {
+        let dir = tempfile::tempdir().unwrap();
+        v1_upgrade_scenario(&new_shared(dir.path()));
+    }
+
+    /// Same with the real Access driver (local test folder; never the shared development database).
+    #[test]
+    #[ignore]
+    fn access_v1_database_upgrades_to_v2_in_place() {
+        let Ok(dir) = std::env::var("ASR_ACCESS_TEST_DIR") else { return };
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = std::path::PathBuf::from(dir).join(format!("upgrade-{}.accdb", uuid::Uuid::new_v4()));
+        create_database(&p, "Upgrade test", "test", "test").unwrap();
+        v1_upgrade_scenario(&p);
     }
 
     /// Missing driver through the real ODBC driver manager: a driver name that is not installed gives

@@ -150,7 +150,7 @@ pub fn run_cycle(local: &Mutex<Connection>, shared: &mut dyn SharedConn, dev: &D
         let conn = lock(local);
         let since: i64 = crate::db::get_setting(&conn, &seq_key).ok().flatten().and_then(|v| v.parse().ok()).unwrap_or(0);
         let last_full = crate::db::get_setting(&conn, &full_key).ok().flatten();
-        let mut st = conn.prepare("SELECT shared_id, shared_version FROM tickets WHERE shared_id IS NOT NULL AND merged_into IS NULL AND shared_state='shared'").map_err(|e| local_err(e.into()))?;
+        let mut st = conn.prepare("SELECT shared_id, shared_version FROM tickets WHERE shared_id IS NOT NULL AND shared_state='shared'").map_err(|e| local_err(e.into()))?;
         let map: HashMap<String, i64> = st
             .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
             .map_err(|e| local_err(e.into()))?
@@ -194,6 +194,11 @@ pub fn run_cycle(local: &Mutex<Connection>, shared: &mut dyn SharedConn, dev: &D
     }
     {
         let conn = lock(local);
+        match q::resolve_redirects(&conn) {
+            Ok(n) if n > 0 => diag::record(&conn, Severity::Info, "sync", "MERGE_RESOLVED", &format!("{n} combined case(s) folded into their target after it arrived"), "", ""),
+            Err(e) => diag::record(&conn, Severity::Error, "sync", "MERGE_RESOLVE_FAILED", "Combined cases could not be folded locally", &e.to_string(), ""),
+            _ => {}
+        }
         let now = crate::db::now();
         let _ = crate::db::set_setting(&conn, &seq_key, &top.max(since).to_string());
         if full_due {

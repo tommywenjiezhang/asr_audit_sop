@@ -480,6 +480,49 @@ const MIGRATIONS: &[&str] = &[
         correlation TEXT
     );
     "#,
+    // v5 (1.2.0) - Outlook coordination mirror, case links, assignment <-> shared reservation
+    r#"
+    -- read-only mirror of the shared OutlookOperations rows (pending Outlook work indicators, handoff state)
+    CREATE TABLE shared_outlook_ops (
+        outlook_op_id TEXT PRIMARY KEY,
+        ticket_id INTEGER REFERENCES tickets(id),
+        ticket_shared_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        state TEXT NOT NULL,
+        active INTEGER NOT NULL DEFAULT 0,
+        notify_state TEXT,
+        from_staff_shared_id TEXT,
+        to_staff_shared_id TEXT,
+        device_id TEXT,
+        device_name TEXT,
+        staff_name TEXT,
+        email_count INTEGER NOT NULL DEFAULT 0,
+        moved_count INTEGER NOT NULL DEFAULT 0,
+        last_error TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        expires_at TEXT,
+        finished_at TEXT
+    );
+    CREATE INDEX idx_outlook_ops_ticket ON shared_outlook_ops(ticket_id, active);
+
+    -- links between cases (related / possible duplicate), keyed by the stable shared ids of both cases
+    CREATE TABLE ticket_relations (
+        relation_id TEXT PRIMARY KEY,
+        ticket_a TEXT NOT NULL,
+        ticket_b TEXT NOT NULL,
+        relation_type TEXT NOT NULL,
+        status TEXT NOT NULL,
+        evidence TEXT,
+        created_at TEXT NOT NULL,
+        origin TEXT NOT NULL DEFAULT 'shared'
+    );
+    CREATE INDEX idx_relations_a ON ticket_relations(ticket_a);
+    CREATE INDEX idx_relations_b ON ticket_relations(ticket_b);
+
+    ALTER TABLE assignment_ops ADD COLUMN shared_op_id TEXT;
+    ALTER TABLE assignment_ops ADD COLUMN archive INTEGER NOT NULL DEFAULT 0;
+    "#,
 ];
 
 /// Open (and migrate) the database file. Before applying migrations to an existing database,
@@ -681,6 +724,30 @@ mod tests {
         let c = open(&path).unwrap(); // repeatable / resumable
         let refs: i64 = c.query_row("SELECT COUNT(DISTINCT ticket_ref) FROM tickets", [], |r| r.get(0)).unwrap();
         assert_eq!(refs, 2);
+    }
+
+    #[test]
+    fn v4_database_migrates_to_v5_keeping_everything() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("support_desk.db");
+        {
+            let c = Connection::open(&path).unwrap();
+            for m in &MIGRATIONS[..4] {
+                c.execute_batch(m).unwrap();
+            }
+            c.execute_batch("PRAGMA user_version=4").unwrap();
+            c.execute("INSERT INTO issue_definitions(id,name,fields_json,keywords_json,catalog_version) VALUES('other','Other','[]','[]',1)", []).unwrap();
+            c.execute("INSERT INTO tickets(status,issue_type,created_at,updated_at,ticket_ref,scope_state,shared_id,shared_state) VALUES('Assigned','other','x','x','ASR-1','current','s-1','shared')", []).unwrap();
+            c.execute("INSERT INTO assignment_ops(ticket_id,to_staff_id,operator,created_at,state,dest_store_id,dest_folder_entry_id,dest_path) VALUES(1,1,'Sam','x','done','S','F','Inbox/A')", []).unwrap();
+        }
+        let c = open(&path).unwrap();
+        assert_eq!(schema_version(&c).unwrap(), 5);
+        assert!(std::fs::read_dir(dir.path().join("backups")).unwrap().any(|e| e.unwrap().file_name().to_string_lossy().starts_with("pre-migration-v4-")), "backup before upgrade");
+        let g = |sql: &str| c.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap();
+        assert_eq!(g("SELECT COUNT(*) FROM tickets WHERE shared_id='s-1' AND status='Assigned'"), 1);
+        assert_eq!(g("SELECT COUNT(*) FROM assignment_ops WHERE shared_op_id IS NULL AND archive=0"), 1, "existing assignments kept");
+        assert_eq!(g("SELECT COUNT(*) FROM shared_outlook_ops"), 0);
+        assert_eq!(g("SELECT COUNT(*) FROM ticket_relations"), 0);
     }
 
     #[test]

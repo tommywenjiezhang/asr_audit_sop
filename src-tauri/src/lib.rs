@@ -2,6 +2,7 @@
 
 pub mod analyzer;
 pub mod assignment;
+pub mod cases;
 pub mod catalog;
 #[cfg(feature = "app")]
 pub mod commands;
@@ -24,6 +25,8 @@ pub mod scope;
 pub mod search;
 pub mod settings;
 pub mod shared_apply;
+pub mod shared_cases;
+pub mod shared_outlook;
 pub mod shared_store;
 pub mod shared_sync;
 pub mod shared_workflow;

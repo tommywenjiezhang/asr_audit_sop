@@ -220,6 +220,10 @@ pub struct TicketBundle {
     pub ownership: Vec<OwnershipRec>,
     pub completions: Vec<CompletionRec>,
     pub activity: Vec<ActivityRec>,
+    /// Outlook runs (assignment moves / archiving) coordinated through the shared database (schema v2)
+    pub outlook_ops: Vec<crate::shared_outlook::OutlookOpRec>,
+    /// links to other cases (related / possible duplicate)
+    pub relations: Vec<crate::shared_cases::RelationRec>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -533,6 +537,18 @@ fn apply_tx(c: &mut dyn SharedConn, op: &Op) -> SResult<OpResult> {
         "email.attach" => op_email_attach(&mut tx, ticket.as_deref().unwrap_or_default(), &mut res)?,
         "staff.upsert" => op_staff(&mut tx, &mut res)?,
         "conflict.resolve" => op_conflict_resolve(&mut tx)?,
+        other if other.starts_with("outlook.") => {
+            if !crate::shared_outlook::apply(&mut WorkflowTx::new(&mut tx), other, ticket.as_deref().unwrap_or_default(), &mut res)? {
+                res.result = "rejected".into();
+                res.message = format!("Unknown operation type {other}");
+            }
+        }
+        other if other.starts_with("relation.") || other == "email.move" => {
+            if !crate::shared_cases::apply(&mut WorkflowTx::new(&mut tx), other, ticket.as_deref().unwrap_or_default(), &mut res)? {
+                res.result = "rejected".into();
+                res.message = format!("Unknown operation type {other}");
+            }
+        }
         other => {
             if !crate::shared_workflow::apply_workflow(&mut WorkflowTx::new(&mut tx), other, ticket.as_deref().unwrap_or_default(), &mut res)? {
                 res.result = "rejected".into();
@@ -1349,6 +1365,22 @@ pub fn fetch_bundles(c: &mut dyn SharedConn, ids: &[String]) -> SResult<Vec<Tick
                     activity_id: col_s(&r, 1), occurred_at: col_s(&r, 2), source: col_s(&r, 3), actor_staff_id: col(&r, 4), actor_name: col(&r, 5), device_id: col(&r, 6), op_id: col(&r, 7),
                     action: col_s(&r, 8), field_name: col(&r, 9), old_value: col(&r, 10), new_value: col(&r, 11),
                 });
+            }
+        }
+        if c.table_exists("OutlookOperations")? {
+            for o in crate::shared_outlook::for_tickets(c, chunk)? {
+                if let Some(b) = map.get_mut(&o.ticket_id) {
+                    b.outlook_ops.push(o);
+                }
+            }
+        }
+        for r in crate::shared_cases::relations_for(c, chunk)? {
+            for t in [&r.ticket_a, &r.ticket_b] {
+                if let Some(b) = map.get_mut(t) {
+                    if !b.relations.iter().any(|x| x.relation_id == r.relation_id) {
+                        b.relations.push(r.clone());
+                    }
+                }
             }
         }
         for id in chunk {

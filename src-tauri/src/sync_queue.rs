@@ -744,11 +744,17 @@ fn remap_ticket(conn: &Connection, tid: i64, shared: &str) -> AppResult<i64> {
 
 /// Combine local ticket `from` into `into`: links, notes, history, fields, issues, completion and
 /// ownership rows move; `from` stays as a hidden redirect (merged_into) - nothing is deleted.
-pub fn merge_local(conn: &Connection, from: i64, into: i64) -> AppResult<()> {
+/// Move the dependent rows of `from` to `into` (no flags, no history).
+fn move_rows(conn: &Connection, from: i64, into: i64) -> AppResult<()> {
     conn.execute("UPDATE OR IGNORE ticket_email_links SET ticket_id=?2 WHERE ticket_id=?1", params![from, into])?;
-    for t in ["ticket_notes", "ticket_history", "ownership_history", "completion_history", "message_completion", "sync_conflicts"] {
+    for t in ["ticket_notes", "ticket_history", "ownership_history", "completion_history", "message_completion", "sync_conflicts", "shared_outlook_ops"] {
         conn.execute(&format!("UPDATE {t} SET ticket_id=?2 WHERE ticket_id=?1"), params![from, into])?;
     }
+    Ok(())
+}
+
+pub fn merge_local(conn: &Connection, from: i64, into: i64) -> AppResult<()> {
+    move_rows(conn, from, into)?;
     conn.execute("UPDATE sync_ops SET ticket_id=?2 WHERE ticket_id=?1 AND state IN ('held','pending')", params![from, into])?;
     conn.execute(
         "INSERT OR IGNORE INTO ticket_fields(ticket_id, field_key, extracted_value, extraction_confidence, manual_value, verified, updated_at)
@@ -922,6 +928,9 @@ pub fn apply_bundle(conn: &Connection, b: &TicketBundle) -> AppResult<i64> {
         };
         if e.is_active {
             tx.execute("INSERT OR IGNORE INTO ticket_email_links(ticket_id, message_id, link_type, linked_at) VALUES(?1, ?2, ?3, ?4)", params![tid, mid, e.link_type, ts])?;
+        } else if !k("*") && b.core.merged_into.as_deref().unwrap_or("").is_empty() {
+            // the email was moved to another case (corrected association); the email itself is kept
+            tx.execute("DELETE FROM ticket_email_links WHERE ticket_id=?1 AND message_id=?2", params![tid, mid])?;
         }
     }
     // issue types
@@ -1028,11 +1037,67 @@ pub fn apply_bundle(conn: &Connection, b: &TicketBundle) -> AppResult<i64> {
             params![tid, a.occurred_at, a.actor_name.clone().unwrap_or_else(|| a.source.clone()), a.action, a.field_name, a.old_value, a.new_value, a.activity_id, a.op_id, a.source],
         )?;
     }
+    for o in &b.outlook_ops {
+        tx.execute(
+            "INSERT INTO shared_outlook_ops(outlook_op_id, ticket_id, ticket_shared_id, kind, state, active, notify_state, from_staff_shared_id, to_staff_shared_id, device_id, device_name, staff_name,
+                                            email_count, moved_count, last_error, created_at, updated_at, expires_at, finished_at)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)
+             ON CONFLICT(outlook_op_id) DO UPDATE SET ticket_id=excluded.ticket_id, state=excluded.state, active=excluded.active, notify_state=excluded.notify_state,
+               moved_count=excluded.moved_count, last_error=excluded.last_error, updated_at=excluded.updated_at, expires_at=excluded.expires_at, finished_at=excluded.finished_at",
+            params![o.outlook_op_id, tid, o.ticket_id, o.kind, o.state, o.active as i64, o.notify_state, o.from_staff_id, o.to_staff_id, o.device_id, o.device_name, o.staff_name,
+                o.email_ids.len() as i64, o.moved_ids.len() as i64, o.last_error, o.created_at, o.updated_at, o.expires_at, o.finished_at],
+        )?;
+    }
+    for r in &b.relations {
+        tx.execute(
+            "INSERT INTO ticket_relations(relation_id, ticket_a, ticket_b, relation_type, status, evidence, created_at, origin) VALUES(?1,?2,?3,?4,?5,?6,?7,'shared')
+             ON CONFLICT(relation_id) DO UPDATE SET ticket_a=excluded.ticket_a, ticket_b=excluded.ticket_b, status=excluded.status, evidence=excluded.evidence, origin='shared'",
+            params![r.relation_id, r.ticket_a, r.ticket_b, r.relation_type, r.status, r.evidence, r.created_at],
+        )?;
+    }
+    // a case combined into another one: fold it locally once the target exists here (after its rows
+    // above were stored, so notes, ownership periods and history all end up on the remaining case)
+    if let Some(target_shared) = c.merged_into.as_deref().filter(|m| !m.is_empty()) {
+        let target: Option<i64> = tx.query_row("SELECT id FROM tickets WHERE shared_id=?1", [target_shared], |r| r.get(0)).optional()?;
+        if let Some(target) = target.filter(|t| *t != tid) {
+            let already: Option<i64> = tx.query_row("SELECT merged_into FROM tickets WHERE id=?1", [tid], |r| r.get(0))?;
+            if already == Some(target) {
+                move_rows(&tx, tid, target)?;
+            } else {
+                merge_local(&tx, tid, target)?;
+            }
+            crate::search::reindex(&tx, target)?;
+        }
+    }
     crate::tickets::refresh_school_columns_pub(&tx, tid)?;
     crate::scope::recompute_ticket(&tx, tid, "sync")?;
     crate::search::reindex(&tx, tid)?;
     tx.commit()?;
     Ok(tid)
+}
+
+/// Local cases whose shared record was combined into another case, applied before that case arrived
+/// here: combine them now that the target exists locally (keeps a fresh computer free of duplicates).
+pub fn resolve_redirects(conn: &Connection) -> AppResult<usize> {
+    let pending: Vec<(i64, String)> = {
+        let mut st = conn.prepare(
+            "SELECT id, json_extract(shared_snapshot,'$.merged_into') FROM tickets
+             WHERE merged_into IS NULL AND shared_snapshot IS NOT NULL AND COALESCE(json_extract(shared_snapshot,'$.merged_into'),'')<>''",
+        )?;
+        let v = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<Result<_, _>>()?;
+        v
+    };
+    let mut n = 0;
+    for (tid, target_shared) in pending {
+        let target: Option<i64> = conn.query_row("SELECT id FROM tickets WHERE shared_id=?1", [&target_shared], |r| r.get(0)).optional()?;
+        if let Some(t) = target.filter(|t| *t != tid) {
+            let tx = conn.unchecked_transaction()?;
+            merge_local(&tx, tid, t)?;
+            tx.commit()?;
+            n += 1;
+        }
+    }
+    Ok(n)
 }
 
 // ------------------------------------------------------------------ conflicts

@@ -40,14 +40,14 @@ fn s(v: &Value, k: &str) -> Option<String> {
     v.get(k).and_then(|x| x.as_str()).map(String::from).filter(|x| !x.is_empty())
 }
 
-fn staff_name(tx: &mut WorkflowTx<'_, '_>, id: &Option<String>) -> String {
+pub(crate) fn staff_name(tx: &mut WorkflowTx<'_, '_>, id: &Option<String>) -> String {
     match id {
         Some(i) => tx.query("SELECT display_name FROM Staff WHERE staff_id = ?", &[i.clone().into()]).ok().and_then(|r| r.first().map(|r| col_s(r, 0))).unwrap_or_else(|| "another staff member".into()),
         None => "nobody".into(),
     }
 }
 
-fn set_status(tx: &mut WorkflowTx<'_, '_>, tid: &str, cur: &TicketCore, status: &str, review_reason: Option<String>, done_at: Option<String>) -> SResult<()> {
+pub(crate) fn set_status(tx: &mut WorkflowTx<'_, '_>, tid: &str, cur: &TicketCore, status: &str, review_reason: Option<String>, done_at: Option<String>) -> SResult<()> {
     tx.exec(
         "UPDATE Tickets SET ticket_status = ?, review_reason = ?, done_at = ? WHERE ticket_id = ?",
         &[status.into(), review_reason.map(|r| Val::Text(sa::cut(&r, 255))).unwrap_or(Val::Null), done_at.map(Val::Text).unwrap_or(Val::Null), tid.into()],
@@ -59,7 +59,7 @@ fn set_status(tx: &mut WorkflowTx<'_, '_>, tid: &str, cur: &TicketCore, status: 
     Ok(())
 }
 
-fn change_owner(tx: &mut WorkflowTx<'_, '_>, tid: &str, cur: &TicketCore, new_owner: Option<String>, reason: &str) -> SResult<()> {
+pub(crate) fn change_owner(tx: &mut WorkflowTx<'_, '_>, tid: &str, cur: &TicketCore, new_owner: Option<String>, reason: &str) -> SResult<()> {
     let now = tx.now();
     let who = tx.op().staff_name.clone();
     // close the open ownership period (history keeps every earlier owner and their dates)
@@ -82,6 +82,9 @@ fn change_owner(tx: &mut WorkflowTx<'_, '_>, tid: &str, cur: &TicketCore, new_ow
             "claim" => "Claimed",
             "takeover" => "Taken over",
             "released" => "Ownership cleared",
+            "assign" => "Assigned",
+            "reassign" => "Reassigned",
+            "merge" => "Owner kept from combined case",
             _ => "Owner changed",
         },
         Some("owner"),
@@ -296,15 +299,18 @@ fn join(tx: &mut WorkflowTx<'_, '_>, src: &str, cur: &TicketCore, res: &mut OpRe
         res.message = "No target case.".into();
         return Ok(());
     };
-    let mut target = target_in;
-    for _ in 0..8 {
-        let r = tx.query("SELECT merged_into FROM Tickets WHERE ticket_id = ?", &[target.clone().into()])?;
-        match r.first().and_then(|r| col(r, 0)).filter(|x| !x.is_empty()) {
-            Some(next) => target = next,
-            None => break,
-        }
+    if target_in == src {
+        return Ok(());
     }
+    let Some(target) = crate::shared_cases::resolve(tx, &target_in)? else {
+        res.result = "rejected".into();
+        res.message = "The target case does not exist in the shared database yet (sync first).".into();
+        return Ok(());
+    };
     if target == src {
+        // the target was itself combined into this case earlier: joining would create a loop
+        res.result = "rejected".into();
+        res.message = "The target case was already combined into this case. Nothing was changed (a circular merge is not allowed).".into();
         return Ok(());
     }
     let tgt = tx.core(&target)?;
@@ -314,6 +320,17 @@ fn join(tx: &mut WorkflowTx<'_, '_>, src: &str, cur: &TicketCore, res: &mut OpRe
             let bn = staff_name(tx, &Some(b.clone()));
             tx.conflict("owner", "owner", None, Some(an), Some(bn), "The two cases have different owners. Agree on one owner first (Take over), then add the case.");
             return Ok(());
+        }
+    }
+    // the remaining case keeps an owner: when only the added case had one, that person becomes the owner
+    let mut tgt = tgt;
+    if tgt.owner_staff_id.is_none() && cur.owner_staff_id.is_some() {
+        change_owner(tx, &target, &tgt, cur.owner_staff_id.clone(), "merge")?;
+        tgt = tx.core(&target)?;
+        if tgt.status == UNASSIGNED {
+            let next = if cur.status == DONE || cur.status == UNASSIGNED { ASSIGNED } else { cur.status.as_str() };
+            set_status(tx, &target, &tgt, next, cur.review_reason.clone().filter(|_| next == REVIEW), None)?;
+            tgt = tx.core(&target)?;
         }
     }
     let now = tx.now();
@@ -331,11 +348,24 @@ fn join(tx: &mut WorkflowTx<'_, '_>, src: &str, cur: &TicketCore, res: &mut OpRe
         tx.exec("UPDATE TicketEmails SET is_active = 0 WHERE ticket_id = ? AND email_id = ?", &[src.into(), eid.into()])?;
     }
     tx.exec("UPDATE TicketNotes SET ticket_id = ? WHERE ticket_id = ?", &[target.clone().into(), src.into()])?;
+    // schools become additional school groups of the target; fields fill gaps (target values are kept)
+    crate::shared_cases::merge_schools_and_fields(tx, cur, &tgt)?;
+    // earlier aliases of the source now point at the target too
+    tx.exec("UPDATE TicketAliases SET ticket_id = ? WHERE ticket_id = ?", &[target.clone().into(), src.into()])?;
+    // links of the source move to the target (a link between the two cases themselves is closed)
+    tx.exec("UPDATE TicketRelations SET relation_status = 'removed' WHERE (ticket_a = ? AND ticket_b = ?) OR (ticket_a = ? AND ticket_b = ?)", &[src.into(), target.clone().into(), target.clone().into(), src.into()])?;
+    tx.exec("UPDATE TicketRelations SET ticket_a = ? WHERE ticket_a = ? AND relation_status <> 'removed'", &[target.clone().into(), src.into()])?;
+    tx.exec("UPDATE TicketRelations SET ticket_b = ? WHERE ticket_b = ? AND relation_status <> 'removed'", &[target.clone().into(), src.into()])?;
     for r in tx.query("SELECT issue_type, origin FROM TicketIssueTypes WHERE ticket_id = ?", &[src.into()])? {
         if tx.query("SELECT issue_type FROM TicketIssueTypes WHERE ticket_id = ? AND issue_type = ?", &[target.clone().into(), col_s(&r, 0).into()])?.is_empty() {
             tx.exec("INSERT INTO TicketIssueTypes (ticket_id, issue_type, sort_order, origin) VALUES (?, ?, 200, ?)", &[target.clone().into(), col_s(&r, 0).into(), col_s(&r, 1).into()])?;
         }
     }
+    // the added case's open ownership period ends here (its owner continues on the remaining case)
+    tx.exec(
+        "UPDATE OwnershipHistory SET ended_at = ?, ended_by = ?, end_reason = 'merged' WHERE ticket_id = ? AND ended_at IS NULL",
+        &[now.clone().into(), sa::cut(&op.staff_name, 100).into(), src.into()],
+    )?;
     tx.exec("UPDATE Tickets SET merged_into = ? WHERE ticket_id = ?", &[target.clone().into(), src.into()])?;
     if tx.query("SELECT alias_key FROM TicketAliases WHERE alias_key = ?", &[cur.ticket_ref.clone().into()])?.is_empty() {
         tx.exec("INSERT INTO TicketAliases (alias_key, ticket_id, alias_type, created_at) VALUES (?, ?, 'ref', ?)", &[sa::cut(&cur.ticket_ref, 64).into(), target.clone().into(), now.into()])?;
@@ -382,16 +412,6 @@ pub fn mirror_status(conn: &rusqlite::Connection, tid: i64, c: &TicketCore, owne
          WHERE id=?1",
         params![tid, c.status, owner_local, c.review_reason, c.done_at, crate::db::now()],
     )?;
-    if c.merged_into.as_deref().map(|m| !m.is_empty()).unwrap_or(false) {
-        // joined into another case: keep the local row as a hidden redirect once the target is mirrored
-        if let Ok(Some(target)) = conn.query_row("SELECT id FROM tickets WHERE shared_id=?1", [c.merged_into.clone().unwrap()], |r| r.get::<_, i64>(0)).map(Some).or_else(|e| match e {
-            rusqlite::Error::QueryReturnedNoRows => Ok(None),
-            e => Err(e),
-        }) {
-            if target != tid {
-                crate::sync_queue::merge_local(conn, tid, target)?;
-            }
-        }
-    }
+    // a case joined into another one is folded at the end of `apply_bundle` (after its rows are stored)
     Ok(())
 }
