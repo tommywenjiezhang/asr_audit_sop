@@ -2,7 +2,7 @@
 
 This guide covers how to compile, test, package and verify this Tauri 2 app (Rust + Svelte + SQLite + a Python Outlook worker) on a managed NJ OIT Windows 11 PC. It is written so that the same process can be reused for **any Rust/Tauri desktop app** on a machine with CrowdStrike Falcon, Group Policy and OneDrive-redirected folders. Section 10 is the checklist for reusing it.
 
-Last verified end to end on 2026-11-17, with Rust 1.100.0 (MSVC), VS 2022 Build Tools (MSVC 14.44), Windows SDK 10.0.26100, Node 24, Python 3.14 and Tauri CLI 2.12.
+Last verified end to end on 2026-11-18, with Rust 1.100.0 (MSVC), VS 2022 Build Tools (MSVC 14.44), Windows SDK 10.0.26100, Node 24, Python 3.14 and Tauri CLI 2.12. The child-folder branch passes 50 Python tests, a zero-warning Svelte check and 150 Rust tests.
 
 ---
 
@@ -150,7 +150,7 @@ You can run each step by hand, for example when adapting the process to another 
 4. **Tests** (`test.ps1`). Any failure stops the build:
    - `python -m unittest discover -s outlook_worker/tests -v` (25 tests)
    - `npx svelte-check --tsconfig ./tsconfig.json` (0 errors, 0 warnings expected)
-   - `cargo test --no-default-features` in `src-tauri` (64 tests, plus one ignored opt-in test `migrate_real_copy` for checking a migration on a copy of a real database: `set ASR_DB_COPY=<copy> && cargo test --no-default-features -- --ignored migrate_real_copy --nocapture`). The `app` feature, which is the Tauri shell, is off, so the core logic can be tested without WebView2.
+   - `cargo test --no-default-features` in `src-tauri` (150 passed, 9 ignored opt-in tests). The `app` feature, which is the Tauri shell, is off, so the core logic can be tested without WebView2.
 5. **Worker exe** (`-WithWorkerExe` only):
    `python -m PyInstaller --onefile --noconsole --name outlook_worker --distpath outlook_worker outlook_worker/outlook_worker.py`.
    Then it writes `src-tauri/tauri.conf.windows.json`, a copy of `tauri.conf.json` with `outlook_worker.exe` added to `bundle.resources`.

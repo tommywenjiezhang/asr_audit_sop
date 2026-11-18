@@ -1458,6 +1458,7 @@
       "Unassigned",
       "Assigned",
       "In Progress",
+      "Review",
       "Done"
     ],
     "templates": [
@@ -2557,6 +2558,8 @@
     "1": {
       "assignments": [],
       "completion": [],
+      "completions": [],
+      "conflicts": [],
       "fields": [
         {
           "effective": "Jordan",
@@ -2565,7 +2568,7 @@
           "key": "contact_first_name",
           "manual_value": null,
           "state": "Extracted - Not Verified",
-          "updated_at": "2026-11-17T20:42:23Z",
+          "updated_at": "2026-11-18T14:44:44Z",
           "verified": false
         },
         {
@@ -2575,7 +2578,7 @@
           "key": "error_message",
           "manual_value": null,
           "state": "Extracted - Not Verified",
-          "updated_at": "2026-11-17T20:42:23Z",
+          "updated_at": "2026-11-18T14:44:44Z",
           "verified": false
         },
         {
@@ -2585,7 +2588,7 @@
           "key": "expected_grades",
           "manual_value": null,
           "state": "Extracted - Not Verified",
-          "updated_at": "2026-11-17T20:42:23Z",
+          "updated_at": "2026-11-18T14:44:44Z",
           "verified": false
         },
         {
@@ -2595,7 +2598,7 @@
           "key": "form_type",
           "manual_value": null,
           "state": "Extracted - Not Verified",
-          "updated_at": "2026-11-17T20:42:23Z",
+          "updated_at": "2026-11-18T14:44:44Z",
           "verified": false
         },
         {
@@ -2605,7 +2608,7 @@
           "key": "issue_description",
           "manual_value": null,
           "state": "Extracted - Not Verified",
-          "updated_at": "2026-11-17T20:42:23Z",
+          "updated_at": "2026-11-18T14:44:44Z",
           "verified": false
         },
         {
@@ -2615,7 +2618,7 @@
           "key": "school_address",
           "manual_value": null,
           "state": "Extracted - Not Verified",
-          "updated_at": "2026-11-17T20:42:23Z",
+          "updated_at": "2026-11-18T14:44:44Z",
           "verified": false
         },
         {
@@ -2625,7 +2628,7 @@
           "key": "school_municipality",
           "manual_value": null,
           "state": "Extracted - Not Verified",
-          "updated_at": "2026-11-17T20:42:23Z",
+          "updated_at": "2026-11-18T14:44:44Z",
           "verified": false
         },
         {
@@ -2635,7 +2638,7 @@
           "key": "school_name",
           "manual_value": null,
           "state": "Extracted - Not Verified",
-          "updated_at": "2026-11-17T20:42:23Z",
+          "updated_at": "2026-11-18T14:44:44Z",
           "verified": false
         },
         {
@@ -2645,7 +2648,7 @@
           "key": "school_njiis_id",
           "manual_value": "0012345",
           "state": "Verified",
-          "updated_at": "2026-11-17T20:42:23Z",
+          "updated_at": "2026-11-18T14:44:44Z",
           "verified": true
         },
         {
@@ -2655,7 +2658,7 @@
           "key": "school_type",
           "manual_value": null,
           "state": "Extracted - Not Verified",
-          "updated_at": "2026-11-17T20:42:23Z",
+          "updated_at": "2026-11-18T14:44:44Z",
           "verified": false
         },
         {
@@ -2665,7 +2668,7 @@
           "key": "school_zip",
           "manual_value": null,
           "state": "Extracted - Not Verified",
-          "updated_at": "2026-11-17T20:42:23Z",
+          "updated_at": "2026-11-18T14:44:44Z",
           "verified": false
         },
         {
@@ -2675,7 +2678,7 @@
           "key": "sender_phone",
           "manual_value": null,
           "state": "Extracted - Not Verified",
-          "updated_at": "2026-11-17T20:42:23Z",
+          "updated_at": "2026-11-18T14:44:44Z",
           "verified": false
         },
         {
@@ -2685,7 +2688,7 @@
           "key": "sender_phone_ext",
           "manual_value": null,
           "state": "Extracted - Not Verified",
-          "updated_at": "2026-11-17T20:42:23Z",
+          "updated_at": "2026-11-18T14:44:44Z",
           "verified": false
         },
         {
@@ -2695,7 +2698,7 @@
           "key": "sender_title",
           "manual_value": "School Nurse",
           "state": "Verified",
-          "updated_at": "2026-11-17T20:42:23Z",
+          "updated_at": "2026-11-18T14:44:44Z",
           "verified": true
         },
         {
@@ -2705,7 +2708,7 @@
           "key": "work_phone",
           "manual_value": null,
           "state": "Extracted - Not Verified",
-          "updated_at": "2026-11-17T20:42:23Z",
+          "updated_at": "2026-11-18T14:44:44Z",
           "verified": false
         }
       ],
@@ -2713,7 +2716,7 @@
         {
           "action": "Work started",
           "actor": "Sam Staff",
-          "at": "2026-11-17T20:42:23Z",
+          "at": "2026-11-18T14:44:44Z",
           "field": "status",
           "id": 38,
           "new_value": "In Progress",
@@ -2722,7 +2725,7 @@
         {
           "action": "Copilot prompt copied",
           "actor": "Sam Staff",
-          "at": "2026-11-17T20:42:23Z",
+          "at": "2026-11-18T14:44:44Z",
           "field": null,
           "id": 26,
           "new_value": "2716 characters",
@@ -2731,25 +2734,25 @@
         {
           "action": "Ticket updated",
           "actor": "Sam Staff",
-          "at": "2026-11-17T20:42:23Z",
+          "at": "2026-11-18T14:44:44Z",
           "field": "staff_actions",
           "id": 25,
           "new_value": "Checked NJIIS: the subtype field is empty for this school.",
           "old_value": null
         },
         {
-          "action": "Ticket updated",
+          "action": "Note added",
           "actor": "Sam Staff",
-          "at": "2026-11-17T20:42:23Z",
-          "field": "internal_notes",
+          "at": "2026-11-18T14:44:44Z",
+          "field": null,
           "id": 24,
-          "new_value": "School confirmed by phone that they are a private school.",
+          "new_value": null,
           "old_value": null
         },
         {
           "action": "Field verified",
           "actor": "Sam Staff",
-          "at": "2026-11-17T20:42:23Z",
+          "at": "2026-11-18T14:44:44Z",
           "field": "school_njiis_id",
           "id": 23,
           "new_value": "0012345",
@@ -2758,7 +2761,7 @@
         {
           "action": "Field verified",
           "actor": "Sam Staff",
-          "at": "2026-11-17T20:42:23Z",
+          "at": "2026-11-18T14:44:44Z",
           "field": "sender_title",
           "id": 22,
           "new_value": "School Nurse",
@@ -2767,7 +2770,7 @@
         {
           "action": "Status changed",
           "actor": "system",
-          "at": "2026-11-17T20:42:23Z",
+          "at": "2026-11-18T14:44:44Z",
           "field": "status",
           "id": 11,
           "new_value": "Assigned",
@@ -2776,7 +2779,7 @@
         {
           "action": "Owner updated from Outlook folder (no notification)",
           "actor": "system",
-          "at": "2026-11-17T20:42:23Z",
+          "at": "2026-11-18T14:44:44Z",
           "field": "assignee",
           "id": 10,
           "new_value": "Sam Staff",
@@ -2785,7 +2788,7 @@
         {
           "action": "Ticket created from Outlook email",
           "actor": "system",
-          "at": "2026-11-17T20:42:23Z",
+          "at": "2026-11-18T14:44:44Z",
           "field": "issue_type",
           "id": 1,
           "new_value": "school_subtype_missing",
@@ -2809,7 +2812,7 @@
           "id": 1,
           "is_internal": false,
           "link_type": "original",
-          "location_checked_at": "2026-11-17T20:42:23Z",
+          "location_checked_at": "2026-11-18T14:44:44Z",
           "location_status": "found",
           "out_reason": null,
           "owner_name": "Sam Staff",
@@ -2821,26 +2824,102 @@
           "subject": "School Subtype Error on the ASR"
         }
       ],
+      "notes": [
+        {
+          "author_name": "Sam Staff",
+          "body": "School confirmed by phone that they are a private school.",
+          "created_at": "2026-11-18T14:44:44Z",
+          "note_id": "66391c28-7ecb-460b-bd89-f4564abe1086",
+          "origin": "local",
+          "sync_state": "pending",
+          "updated_at": "2026-11-18T14:44:44Z"
+        }
+      ],
+      "outlook_ops": [],
+      "outlook_pending": null,
+      "ownership": [],
+      "pending_ops": [
+        {
+          "attempts": 0,
+          "created_at": "2026-11-18T14:44:44Z",
+          "hold_reason": "before_identity",
+          "last_error": null,
+          "op_id": "94c7f046-eac5-4710-9921-800b744611cd",
+          "op_type": "ticket.start",
+          "staff_name": "Sam Staff",
+          "state": "held"
+        },
+        {
+          "attempts": 0,
+          "created_at": "2026-11-18T14:44:44Z",
+          "hold_reason": "before_identity",
+          "last_error": null,
+          "op_id": "ea425ecb-90c6-4329-9cb7-37439eef2767",
+          "op_type": "ticket.update",
+          "staff_name": "Sam Staff",
+          "state": "held"
+        },
+        {
+          "attempts": 0,
+          "created_at": "2026-11-18T14:44:44Z",
+          "hold_reason": "before_identity",
+          "last_error": null,
+          "op_id": "cfe8d52c-4160-4620-a524-0afa2468d9a9",
+          "op_type": "note.add",
+          "staff_name": "Sam Staff",
+          "state": "held"
+        },
+        {
+          "attempts": 0,
+          "created_at": "2026-11-18T14:44:44Z",
+          "hold_reason": "before_identity",
+          "last_error": null,
+          "op_id": "acd1be63-6697-4fdc-876d-fabfb376b312",
+          "op_type": "field.set",
+          "staff_name": "Sam Staff",
+          "state": "held"
+        },
+        {
+          "attempts": 0,
+          "created_at": "2026-11-18T14:44:44Z",
+          "hold_reason": "before_identity",
+          "last_error": null,
+          "op_id": "fa392e31-143a-4745-adfa-89796af45de8",
+          "op_type": "field.set",
+          "staff_name": "Sam Staff",
+          "state": "held"
+        },
+        {
+          "attempts": 0,
+          "created_at": "2026-11-18T14:44:44Z",
+          "hold_reason": "before_identity",
+          "last_error": null,
+          "op_id": "7aac824d-fd68-4380-9a16-2a240c4f013a",
+          "op_type": "ticket.create",
+          "staff_name": "Sam Staff",
+          "state": "held"
+        }
+      ],
       "schools": [
         1
       ],
       "ticket": {
-        "assigned_at": "2026-11-17T20:42:23Z",
+        "assigned_at": "2026-11-18T14:44:44Z",
         "assigned_staff": null,
         "assignee_name": "Sam Staff",
         "assignee_staff_id": 1,
         "classification_confidence": 0.76,
         "completed_at": null,
         "conversation_id": "C-1",
-        "created_at": "2026-11-17T20:42:23Z",
+        "created_at": "2026-11-18T14:44:44Z",
         "display_id": "T-000001",
         "first_received_at": "2026-11-10T14:05:00Z",
         "id": 1,
-        "internal_notes": "School confirmed by phone that they are a private school.",
+        "internal_notes": null,
         "issue_type": "school_subtype_missing",
         "issue_type_source": "auto",
         "last_email_received_at": "2026-11-10T14:05:00Z",
-        "last_prompt_at": "2026-11-17T20:42:23Z",
+        "last_prompt_at": "2026-11-18T14:44:44Z",
         "last_response_at": null,
         "low_confidence": false,
         "needs_review": false,
@@ -2850,29 +2929,34 @@
         "possible_duplicate_of": null,
         "priority": "Normal",
         "resolution_notes": null,
+        "review_reason": null,
         "school_name": "Maple Leaf Academy",
         "school_njiis_id": "0012345",
         "school_verification": "Verified",
-        "scope_changed_at": "2026-11-17T20:42:23Z",
+        "scope_changed_at": "2026-11-18T14:44:44Z",
         "scope_reason": null,
         "scope_state": "current",
         "sender_email": "jrivera@mapleleaf.example.org",
         "sender_name": "Rivera, Jordan",
+        "shared_refreshed_at": null,
+        "shared_state": "queued",
+        "shared_version": 0,
         "source": "outlook",
         "staff_actions": "Checked NJIIS: the subtype field is empty for this school.",
         "status": "In Progress",
+        "sync_state": "pending",
         "ticket_ref": "ASR-826E0B48",
-        "updated_at": "2026-11-17T20:42:23Z"
+        "updated_at": "2026-11-18T14:44:44Z"
       }
     },
     "2": {
       "assignments": [
         {
-          "created_at": "2026-11-17T20:42:23Z",
+          "created_at": "2026-11-18T14:44:44Z",
           "dest_folder_entry_id": "F-MY",
           "dest_path": "Help Desk Shared Mailbox (demo) › Inbox/My Folder",
           "dest_store_id": "DEMO-STORE",
-          "finished_at": "2026-11-17T20:42:23Z",
+          "finished_at": "2026-11-18T14:44:44Z",
           "from_name": null,
           "from_staff_id": null,
           "id": 1,
@@ -2881,19 +2965,19 @@
               "attempts": 0,
               "last_error": null,
               "message_id": 2,
-              "moved_at": "2026-11-17T20:42:23Z",
+              "moved_at": "2026-11-18T14:44:44Z",
               "new_folder_path": "Inbox/My Folder",
               "subject": "Webinar black screen and subtype question"
             }
           ],
           "note": "Please check the webinar settings with the school.",
           "notify_account": null,
-          "notify_at": "2026-11-17T20:42:23Z",
+          "notify_at": "2026-11-18T14:44:44Z",
           "notify_attempts": 1,
           "notify_checked_at": null,
           "notify_entry_id": null,
           "notify_error": "Outlook is not running.",
-          "notify_id": "ASR-EE9A655A-1-20261117T204223Z",
+          "notify_id": "ASR-EE9A655A-1-20261118T144444Z",
           "notify_recipient": "sam.staff@helpdesk.example.gov",
           "notify_state": "failed",
           "operator": "Sam Staff",
@@ -2905,6 +2989,8 @@
         }
       ],
       "completion": [],
+      "completions": [],
+      "conflicts": [],
       "fields": [
         {
           "effective": "Priya",
@@ -2913,7 +2999,7 @@
           "key": "contact_first_name",
           "manual_value": null,
           "state": "Extracted - Not Verified",
-          "updated_at": "2026-11-17T20:42:23Z",
+          "updated_at": "2026-11-18T14:44:44Z",
           "verified": false
         },
         {
@@ -2923,7 +3009,7 @@
           "key": "error_message",
           "manual_value": null,
           "state": "Extracted - Not Verified",
-          "updated_at": "2026-11-17T20:42:23Z",
+          "updated_at": "2026-11-18T14:44:44Z",
           "verified": false
         },
         {
@@ -2933,7 +3019,7 @@
           "key": "form_type",
           "manual_value": null,
           "state": "Extracted - Not Verified",
-          "updated_at": "2026-11-17T20:42:23Z",
+          "updated_at": "2026-11-18T14:44:44Z",
           "verified": false
         },
         {
@@ -2943,7 +3029,7 @@
           "key": "issue_description",
           "manual_value": null,
           "state": "Extracted - Not Verified",
-          "updated_at": "2026-11-17T20:42:23Z",
+          "updated_at": "2026-11-18T14:44:44Z",
           "verified": false
         },
         {
@@ -2953,7 +3039,7 @@
           "key": "school_name",
           "manual_value": null,
           "state": "Extracted - Not Verified",
-          "updated_at": "2026-11-17T20:42:23Z",
+          "updated_at": "2026-11-18T14:44:44Z",
           "verified": false
         },
         {
@@ -2963,7 +3049,7 @@
           "key": "school_njiis_id",
           "manual_value": null,
           "state": "Extracted - Not Verified",
-          "updated_at": "2026-11-17T20:42:23Z",
+          "updated_at": "2026-11-18T14:44:44Z",
           "verified": false
         },
         {
@@ -2973,7 +3059,7 @@
           "key": "sender_title",
           "manual_value": null,
           "state": "Extracted - Not Verified",
-          "updated_at": "2026-11-17T20:42:23Z",
+          "updated_at": "2026-11-18T14:44:44Z",
           "verified": false
         }
       ],
@@ -2981,7 +3067,7 @@
         {
           "action": "Assigned — notification failed",
           "actor": "system",
-          "at": "2026-11-17T20:42:23Z",
+          "at": "2026-11-18T14:44:44Z",
           "field": "notification",
           "id": 33,
           "new_value": "Outlook is not running.",
@@ -2990,7 +3076,7 @@
         {
           "action": "Status changed",
           "actor": "Sam Staff",
-          "at": "2026-11-17T20:42:23Z",
+          "at": "2026-11-18T14:44:44Z",
           "field": "status",
           "id": 32,
           "new_value": "Assigned",
@@ -2999,7 +3085,7 @@
         {
           "action": "Assigned",
           "actor": "Sam Staff",
-          "at": "2026-11-17T20:42:23Z",
+          "at": "2026-11-18T14:44:44Z",
           "field": "assignee",
           "id": 31,
           "new_value": "Unassigned → Sam Staff | folders: Inbox → Help Desk Shared Mailbox (demo) › Inbox/My Folder | note: Please check the webinar settings with the school.",
@@ -3008,7 +3094,7 @@
         {
           "action": "Assignment started",
           "actor": "Sam Staff",
-          "at": "2026-11-17T20:42:23Z",
+          "at": "2026-11-18T14:44:44Z",
           "field": "assignee",
           "id": 30,
           "new_value": "Sam Staff",
@@ -3017,7 +3103,7 @@
         {
           "action": "Issue types set",
           "actor": "Sam Staff",
-          "at": "2026-11-17T20:42:23Z",
+          "at": "2026-11-18T14:44:44Z",
           "field": "issue_type",
           "id": 27,
           "new_value": "webinar_issue, school_subtype_missing",
@@ -3026,7 +3112,7 @@
         {
           "action": "Ticket created from Outlook email",
           "actor": "system",
-          "at": "2026-11-17T20:42:23Z",
+          "at": "2026-11-18T14:44:44Z",
           "field": "issue_type",
           "id": 2,
           "new_value": "webinar_issue",
@@ -3055,7 +3141,7 @@
           "id": 2,
           "is_internal": false,
           "link_type": "original",
-          "location_checked_at": "2026-11-17T20:42:23Z",
+          "location_checked_at": "2026-11-18T14:44:44Z",
           "location_status": "found",
           "out_reason": null,
           "owner_name": "Sam Staff",
@@ -3067,18 +3153,44 @@
           "subject": "Webinar black screen and subtype question"
         }
       ],
+      "notes": [],
+      "outlook_ops": [],
+      "outlook_pending": "handoff:failed",
+      "ownership": [],
+      "pending_ops": [
+        {
+          "attempts": 0,
+          "created_at": "2026-11-18T14:44:44Z",
+          "hold_reason": "before_identity",
+          "last_error": null,
+          "op_id": "fe427d05-2234-4365-8f02-cf4f230d85d8",
+          "op_type": "issues.set",
+          "staff_name": "Sam Staff",
+          "state": "held"
+        },
+        {
+          "attempts": 0,
+          "created_at": "2026-11-18T14:44:44Z",
+          "hold_reason": "before_identity",
+          "last_error": null,
+          "op_id": "f44e04e6-5b80-4e20-9e20-34a366ef1e54",
+          "op_type": "ticket.create",
+          "staff_name": "Sam Staff",
+          "state": "held"
+        }
+      ],
       "schools": [
         1
       ],
       "ticket": {
-        "assigned_at": "2026-11-17T20:42:23Z",
+        "assigned_at": "2026-11-18T14:44:44Z",
         "assigned_staff": null,
         "assignee_name": "Sam Staff",
         "assignee_staff_id": 1,
         "classification_confidence": 0.7,
         "completed_at": null,
         "conversation_id": "C-2",
-        "created_at": "2026-11-17T20:42:23Z",
+        "created_at": "2026-11-18T14:44:44Z",
         "display_id": "T-000002",
         "first_received_at": "2026-11-12T15:30:00Z",
         "id": 2,
@@ -3096,29 +3208,34 @@
         "possible_duplicate_of": null,
         "priority": "Normal",
         "resolution_notes": null,
+        "review_reason": null,
         "school_name": "Brookside Elementary School",
         "school_njiis_id": "0045678",
         "school_verification": "Extracted - Not Verified",
-        "scope_changed_at": "2026-11-17T20:42:23Z",
+        "scope_changed_at": "2026-11-18T14:44:44Z",
         "scope_reason": null,
         "scope_state": "current",
         "sender_email": "pshah@brookside.example.org",
         "sender_name": "Priya Shah",
+        "shared_refreshed_at": null,
+        "shared_state": "queued",
+        "shared_version": 0,
         "source": "outlook",
         "staff_actions": null,
         "status": "Assigned",
+        "sync_state": "pending",
         "ticket_ref": "ASR-EE9A655A",
-        "updated_at": "2026-11-17T20:42:23Z"
+        "updated_at": "2026-11-18T14:44:44Z"
       }
     },
     "3": {
       "assignments": [
         {
-          "created_at": "2026-11-17T20:42:23Z",
+          "created_at": "2026-11-18T14:44:44Z",
           "dest_folder_entry_id": "F-TA",
           "dest_path": "Help Desk Shared Mailbox (demo) › Inbox/Teammate A",
           "dest_store_id": "DEMO-STORE",
-          "finished_at": "2026-11-17T20:42:23Z",
+          "finished_at": "2026-11-18T14:44:44Z",
           "from_name": "Sam Staff",
           "from_staff_id": 1,
           "id": 2,
@@ -3127,19 +3244,19 @@
               "attempts": 0,
               "last_error": null,
               "message_id": 3,
-              "moved_at": "2026-11-17T20:42:23Z",
+              "moved_at": "2026-11-18T14:44:44Z",
               "new_folder_path": "Inbox/Teammate A",
               "subject": "New user account"
             }
           ],
           "note": "Teammate A handles new accounts this week.",
           "notify_account": "sam.staff@helpdesk.example.gov",
-          "notify_at": "2026-11-17T20:42:23Z",
+          "notify_at": "2026-11-18T14:44:44Z",
           "notify_attempts": 1,
           "notify_checked_at": null,
           "notify_entry_id": "DEMO-NOTE",
           "notify_error": null,
-          "notify_id": "ASR-3C3C6CA1-2-20261117T204223Z",
+          "notify_id": "ASR-3C3C6CA1-2-20261118T144444Z",
           "notify_recipient": "teammate.a@helpdesk.example.gov",
           "notify_state": "submitted",
           "operator": "Sam Staff",
@@ -3151,6 +3268,8 @@
         }
       ],
       "completion": [],
+      "completions": [],
+      "conflicts": [],
       "fields": [
         {
           "effective": "Marcus",
@@ -3159,7 +3278,7 @@
           "key": "contact_first_name",
           "manual_value": null,
           "state": "Extracted - Not Verified",
-          "updated_at": "2026-11-17T20:42:23Z",
+          "updated_at": "2026-11-18T14:44:44Z",
           "verified": false
         },
         {
@@ -3169,7 +3288,7 @@
           "key": "first_name",
           "manual_value": null,
           "state": "Extracted - Not Verified",
-          "updated_at": "2026-11-17T20:42:23Z",
+          "updated_at": "2026-11-18T14:44:44Z",
           "verified": false
         },
         {
@@ -3179,7 +3298,7 @@
           "key": "form_type",
           "manual_value": null,
           "state": "Extracted - Not Verified",
-          "updated_at": "2026-11-17T20:42:23Z",
+          "updated_at": "2026-11-18T14:44:44Z",
           "verified": false
         },
         {
@@ -3189,7 +3308,7 @@
           "key": "issue_description",
           "manual_value": null,
           "state": "Extracted - Not Verified",
-          "updated_at": "2026-11-17T20:42:23Z",
+          "updated_at": "2026-11-18T14:44:44Z",
           "verified": false
         },
         {
@@ -3199,7 +3318,7 @@
           "key": "last_name",
           "manual_value": null,
           "state": "Extracted - Not Verified",
-          "updated_at": "2026-11-17T20:42:23Z",
+          "updated_at": "2026-11-18T14:44:44Z",
           "verified": false
         },
         {
@@ -3209,7 +3328,7 @@
           "key": "school_name",
           "manual_value": null,
           "state": "Extracted - Not Verified",
-          "updated_at": "2026-11-17T20:42:23Z",
+          "updated_at": "2026-11-18T14:44:44Z",
           "verified": false
         },
         {
@@ -3219,7 +3338,7 @@
           "key": "sender_phone",
           "manual_value": null,
           "state": "Extracted - Not Verified",
-          "updated_at": "2026-11-17T20:42:23Z",
+          "updated_at": "2026-11-18T14:44:44Z",
           "verified": false
         },
         {
@@ -3229,7 +3348,7 @@
           "key": "sender_title",
           "manual_value": null,
           "state": "Extracted - Not Verified",
-          "updated_at": "2026-11-17T20:42:23Z",
+          "updated_at": "2026-11-18T14:44:44Z",
           "verified": false
         },
         {
@@ -3239,7 +3358,7 @@
           "key": "user_email",
           "manual_value": null,
           "state": "Extracted - Not Verified",
-          "updated_at": "2026-11-17T20:42:23Z",
+          "updated_at": "2026-11-18T14:44:44Z",
           "verified": false
         }
       ],
@@ -3247,7 +3366,7 @@
         {
           "action": "Handoff notification submitted to Outlook (delivery not confirmed)",
           "actor": "system",
-          "at": "2026-11-17T20:42:23Z",
+          "at": "2026-11-18T14:44:44Z",
           "field": "notification",
           "id": 37,
           "new_value": "to teammate.a@helpdesk.example.gov via sam.staff@helpdesk.example.gov",
@@ -3256,7 +3375,7 @@
         {
           "action": "Moved to Ticket History: Reassigned outside the selected scope",
           "actor": "Sam Staff",
-          "at": "2026-11-17T20:42:23Z",
+          "at": "2026-11-18T14:44:44Z",
           "field": "scope",
           "id": 36,
           "new_value": "history",
@@ -3265,7 +3384,7 @@
         {
           "action": "Reassigned",
           "actor": "Sam Staff",
-          "at": "2026-11-17T20:42:23Z",
+          "at": "2026-11-18T14:44:44Z",
           "field": "assignee",
           "id": 35,
           "new_value": "Sam Staff → Teammate A | folders: Inbox/My Folder → Help Desk Shared Mailbox (demo) › Inbox/Teammate A | note: Teammate A handles new accounts this week.",
@@ -3274,7 +3393,7 @@
         {
           "action": "Reassignment started",
           "actor": "Sam Staff",
-          "at": "2026-11-17T20:42:23Z",
+          "at": "2026-11-18T14:44:44Z",
           "field": "assignee",
           "id": 34,
           "new_value": "Teammate A",
@@ -3283,7 +3402,7 @@
         {
           "action": "Status changed",
           "actor": "system",
-          "at": "2026-11-17T20:42:23Z",
+          "at": "2026-11-18T14:44:44Z",
           "field": "status",
           "id": 13,
           "new_value": "Assigned",
@@ -3292,7 +3411,7 @@
         {
           "action": "Owner updated from Outlook folder (no notification)",
           "actor": "system",
-          "at": "2026-11-17T20:42:23Z",
+          "at": "2026-11-18T14:44:44Z",
           "field": "assignee",
           "id": 12,
           "new_value": "Sam Staff",
@@ -3301,7 +3420,7 @@
         {
           "action": "Ticket created from Outlook email",
           "actor": "system",
-          "at": "2026-11-17T20:42:23Z",
+          "at": "2026-11-18T14:44:44Z",
           "field": "issue_type",
           "id": 3,
           "new_value": "new_user_account",
@@ -3325,7 +3444,7 @@
           "id": 3,
           "is_internal": false,
           "link_type": "original",
-          "location_checked_at": "2026-11-17T20:42:23Z",
+          "location_checked_at": "2026-11-18T14:44:44Z",
           "location_status": "found",
           "out_reason": "reassigned",
           "owner_name": "Teammate A",
@@ -3337,18 +3456,34 @@
           "subject": "New user account"
         }
       ],
+      "notes": [],
+      "outlook_ops": [],
+      "outlook_pending": null,
+      "ownership": [],
+      "pending_ops": [
+        {
+          "attempts": 0,
+          "created_at": "2026-11-18T14:44:44Z",
+          "hold_reason": "before_identity",
+          "last_error": null,
+          "op_id": "ce29db72-3cf6-4ed2-8e66-655940a882e7",
+          "op_type": "ticket.create",
+          "staff_name": "Sam Staff",
+          "state": "held"
+        }
+      ],
       "schools": [
         1
       ],
       "ticket": {
-        "assigned_at": "2026-11-17T20:42:23Z",
+        "assigned_at": "2026-11-18T14:44:44Z",
         "assigned_staff": null,
         "assignee_name": "Teammate A",
         "assignee_staff_id": 2,
         "classification_confidence": 0.87,
         "completed_at": null,
         "conversation_id": "C-3",
-        "created_at": "2026-11-17T20:42:23Z",
+        "created_at": "2026-11-18T14:44:44Z",
         "display_id": "T-000003",
         "first_received_at": "2026-11-13T13:10:00Z",
         "id": 3,
@@ -3366,24 +3501,31 @@
         "possible_duplicate_of": null,
         "priority": "Normal",
         "resolution_notes": null,
+        "review_reason": null,
         "school_name": "Hillcrest Middle School",
         "school_njiis_id": null,
         "school_verification": "Unverified School",
-        "scope_changed_at": "2026-11-17T20:42:23Z",
+        "scope_changed_at": "2026-11-18T14:44:44Z",
         "scope_reason": "reassigned",
         "scope_state": "history",
         "sender_email": "mlee@hillcrest.example.org",
         "sender_name": "Marcus Lee",
+        "shared_refreshed_at": null,
+        "shared_state": "queued",
+        "shared_version": 0,
         "source": "outlook",
         "staff_actions": null,
         "status": "Assigned",
+        "sync_state": "pending",
         "ticket_ref": "ASR-3C3C6CA1",
-        "updated_at": "2026-11-17T20:42:23Z"
+        "updated_at": "2026-11-18T14:44:44Z"
       }
     },
     "4": {
       "assignments": [],
       "completion": [],
+      "completions": [],
+      "conflicts": [],
       "fields": [
         {
           "effective": "Elena",
@@ -3392,7 +3534,7 @@
           "key": "contact_first_name",
           "manual_value": null,
           "state": "Extracted - Not Verified",
-          "updated_at": "2026-11-17T20:42:23Z",
+          "updated_at": "2026-11-18T14:44:44Z",
           "verified": false
         },
         {
@@ -3402,7 +3544,7 @@
           "key": "error_message",
           "manual_value": null,
           "state": "Extracted - Not Verified",
-          "updated_at": "2026-11-17T20:42:23Z",
+          "updated_at": "2026-11-18T14:44:44Z",
           "verified": false
         },
         {
@@ -3412,7 +3554,7 @@
           "key": "expected_grades",
           "manual_value": null,
           "state": "Extracted - Not Verified",
-          "updated_at": "2026-11-17T20:42:23Z",
+          "updated_at": "2026-11-18T14:44:44Z",
           "verified": false
         },
         {
@@ -3422,7 +3564,7 @@
           "key": "form_type",
           "manual_value": null,
           "state": "Extracted - Not Verified",
-          "updated_at": "2026-11-17T20:42:23Z",
+          "updated_at": "2026-11-18T14:44:44Z",
           "verified": false
         },
         {
@@ -3432,7 +3574,7 @@
           "key": "issue_description",
           "manual_value": null,
           "state": "Extracted - Not Verified",
-          "updated_at": "2026-11-17T20:42:23Z",
+          "updated_at": "2026-11-18T14:44:44Z",
           "verified": false
         },
         {
@@ -3442,7 +3584,7 @@
           "key": "school2_county",
           "manual_value": null,
           "state": "Extracted - Not Verified",
-          "updated_at": "2026-11-17T20:42:23Z",
+          "updated_at": "2026-11-18T14:44:44Z",
           "verified": false
         },
         {
@@ -3452,7 +3594,7 @@
           "key": "school2_name",
           "manual_value": null,
           "state": "Extracted - Not Verified",
-          "updated_at": "2026-11-17T20:42:23Z",
+          "updated_at": "2026-11-18T14:44:44Z",
           "verified": false
         },
         {
@@ -3462,7 +3604,7 @@
           "key": "school2_njiis_id",
           "manual_value": null,
           "state": "Extracted - Not Verified",
-          "updated_at": "2026-11-17T20:42:23Z",
+          "updated_at": "2026-11-18T14:44:44Z",
           "verified": false
         },
         {
@@ -3472,7 +3614,7 @@
           "key": "school_name",
           "manual_value": null,
           "state": "Extracted - Not Verified",
-          "updated_at": "2026-11-17T20:42:23Z",
+          "updated_at": "2026-11-18T14:44:44Z",
           "verified": false
         },
         {
@@ -3482,7 +3624,7 @@
           "key": "school_njiis_id",
           "manual_value": null,
           "state": "Extracted - Not Verified",
-          "updated_at": "2026-11-17T20:42:23Z",
+          "updated_at": "2026-11-18T14:44:44Z",
           "verified": false
         },
         {
@@ -3492,7 +3634,7 @@
           "key": "school_other_ids",
           "manual_value": null,
           "state": "Extracted - Not Verified",
-          "updated_at": "2026-11-17T20:42:23Z",
+          "updated_at": "2026-11-18T14:44:44Z",
           "verified": false
         },
         {
@@ -3502,7 +3644,7 @@
           "key": "sender_phone",
           "manual_value": null,
           "state": "Extracted - Not Verified",
-          "updated_at": "2026-11-17T20:42:23Z",
+          "updated_at": "2026-11-18T14:44:44Z",
           "verified": false
         },
         {
@@ -3512,7 +3654,7 @@
           "key": "sender_phone_ext",
           "manual_value": null,
           "state": "Extracted - Not Verified",
-          "updated_at": "2026-11-17T20:42:23Z",
+          "updated_at": "2026-11-18T14:44:44Z",
           "verified": false
         },
         {
@@ -3522,7 +3664,7 @@
           "key": "sender_title",
           "manual_value": null,
           "state": "Extracted - Not Verified",
-          "updated_at": "2026-11-17T20:42:23Z",
+          "updated_at": "2026-11-18T14:44:44Z",
           "verified": false
         },
         {
@@ -3532,7 +3674,7 @@
           "key": "work_phone",
           "manual_value": null,
           "state": "Extracted - Not Verified",
-          "updated_at": "2026-11-17T20:42:23Z",
+          "updated_at": "2026-11-18T14:44:44Z",
           "verified": false
         }
       ],
@@ -3540,7 +3682,7 @@
         {
           "action": "Status changed",
           "actor": "system",
-          "at": "2026-11-17T20:42:23Z",
+          "at": "2026-11-18T14:44:44Z",
           "field": "status",
           "id": 15,
           "new_value": "Assigned",
@@ -3549,7 +3691,7 @@
         {
           "action": "Owner updated from Outlook folder (no notification)",
           "actor": "system",
-          "at": "2026-11-17T20:42:23Z",
+          "at": "2026-11-18T14:44:44Z",
           "field": "assignee",
           "id": 14,
           "new_value": "Sam Staff",
@@ -3558,7 +3700,7 @@
         {
           "action": "Ticket created from Outlook email",
           "actor": "system",
-          "at": "2026-11-17T20:42:23Z",
+          "at": "2026-11-18T14:44:44Z",
           "field": "issue_type",
           "id": 4,
           "new_value": "lhd_access_denied",
@@ -3582,7 +3724,7 @@
           "id": 4,
           "is_internal": false,
           "link_type": "original",
-          "location_checked_at": "2026-11-17T20:42:23Z",
+          "location_checked_at": "2026-11-18T14:44:44Z",
           "location_status": "found",
           "out_reason": null,
           "owner_name": "Sam Staff",
@@ -3594,19 +3736,35 @@
           "subject": "ASR access for two of our schools"
         }
       ],
+      "notes": [],
+      "outlook_ops": [],
+      "outlook_pending": null,
+      "ownership": [],
+      "pending_ops": [
+        {
+          "attempts": 0,
+          "created_at": "2026-11-18T14:44:44Z",
+          "hold_reason": "before_identity",
+          "last_error": null,
+          "op_id": "2d1314ec-9c74-481b-9ca7-2991df3675bd",
+          "op_type": "ticket.create",
+          "staff_name": "Sam Staff",
+          "state": "held"
+        }
+      ],
       "schools": [
         1,
         2
       ],
       "ticket": {
-        "assigned_at": "2026-11-17T20:42:23Z",
+        "assigned_at": "2026-11-18T14:44:44Z",
         "assigned_staff": null,
         "assignee_name": "Sam Staff",
         "assignee_staff_id": 1,
         "classification_confidence": 0.68,
         "completed_at": null,
         "conversation_id": "C-4",
-        "created_at": "2026-11-17T20:42:23Z",
+        "created_at": "2026-11-18T14:44:44Z",
         "display_id": "T-000004",
         "first_received_at": "2026-11-14T16:45:00Z",
         "id": 4,
@@ -3624,24 +3782,31 @@
         "possible_duplicate_of": null,
         "priority": "Normal",
         "resolution_notes": null,
+        "review_reason": null,
         "school_name": "Riverside Preschool",
         "school_njiis_id": "0067890",
         "school_verification": "Extracted - Not Verified",
-        "scope_changed_at": "2026-11-17T20:42:23Z",
+        "scope_changed_at": "2026-11-18T14:44:44Z",
         "scope_reason": null,
         "scope_state": "current",
         "sender_email": "egomez@district.example.org",
         "sender_name": "Elena Gomez",
+        "shared_refreshed_at": null,
+        "shared_state": "queued",
+        "shared_version": 0,
         "source": "outlook",
         "staff_actions": null,
         "status": "Assigned",
+        "sync_state": "pending",
         "ticket_ref": "ASR-481BDEA1",
-        "updated_at": "2026-11-17T20:42:23Z"
+        "updated_at": "2026-11-18T14:44:44Z"
       }
     },
     "5": {
       "assignments": [],
       "completion": [],
+      "completions": [],
+      "conflicts": [],
       "fields": [
         {
           "effective": "Tom",
@@ -3650,7 +3815,7 @@
           "key": "contact_first_name",
           "manual_value": null,
           "state": "Extracted - Not Verified",
-          "updated_at": "2026-11-17T20:42:23Z",
+          "updated_at": "2026-11-18T14:44:44Z",
           "verified": false
         },
         {
@@ -3660,7 +3825,7 @@
           "key": "expected_grades",
           "manual_value": null,
           "state": "Extracted - Not Verified",
-          "updated_at": "2026-11-17T20:42:23Z",
+          "updated_at": "2026-11-18T14:44:44Z",
           "verified": false
         },
         {
@@ -3670,7 +3835,7 @@
           "key": "form_type",
           "manual_value": null,
           "state": "Extracted - Not Verified",
-          "updated_at": "2026-11-17T20:42:23Z",
+          "updated_at": "2026-11-18T14:44:44Z",
           "verified": false
         },
         {
@@ -3680,7 +3845,7 @@
           "key": "issue_description",
           "manual_value": null,
           "state": "Extracted - Not Verified",
-          "updated_at": "2026-11-17T20:42:23Z",
+          "updated_at": "2026-11-18T14:44:44Z",
           "verified": false
         },
         {
@@ -3690,7 +3855,7 @@
           "key": "school_name",
           "manual_value": null,
           "state": "Extracted - Not Verified",
-          "updated_at": "2026-11-17T20:42:23Z",
+          "updated_at": "2026-11-18T14:44:44Z",
           "verified": false
         },
         {
@@ -3700,7 +3865,7 @@
           "key": "school_njiis_id",
           "manual_value": null,
           "state": "Extracted - Not Verified",
-          "updated_at": "2026-11-17T20:42:23Z",
+          "updated_at": "2026-11-18T14:44:44Z",
           "verified": false
         },
         {
@@ -3710,7 +3875,7 @@
           "key": "sender_reported_submission",
           "manual_value": null,
           "state": "Extracted - Not Verified",
-          "updated_at": "2026-11-17T20:42:23Z",
+          "updated_at": "2026-11-18T14:44:44Z",
           "verified": false
         }
       ],
@@ -3718,7 +3883,7 @@
         {
           "action": "Status changed",
           "actor": "system",
-          "at": "2026-11-17T20:42:23Z",
+          "at": "2026-11-18T14:44:44Z",
           "field": "status",
           "id": 17,
           "new_value": "Assigned",
@@ -3727,7 +3892,7 @@
         {
           "action": "Owner updated from Outlook folder (no notification)",
           "actor": "system",
-          "at": "2026-11-17T20:42:23Z",
+          "at": "2026-11-18T14:44:44Z",
           "field": "assignee",
           "id": 16,
           "new_value": "Sam Staff",
@@ -3736,7 +3901,7 @@
         {
           "action": "New email in conversation",
           "actor": "system",
-          "at": "2026-11-17T20:42:23Z",
+          "at": "2026-11-18T14:44:44Z",
           "field": null,
           "id": 6,
           "new_value": "RE: Did you receive our ASR?",
@@ -3745,7 +3910,7 @@
         {
           "action": "Ticket created from Outlook email",
           "actor": "system",
-          "at": "2026-11-17T20:42:23Z",
+          "at": "2026-11-18T14:44:44Z",
           "field": "issue_type",
           "id": 5,
           "new_value": "submission_confirm_receipt",
@@ -3769,7 +3934,7 @@
           "id": 6,
           "is_internal": false,
           "link_type": "reply",
-          "location_checked_at": "2026-11-17T20:42:23Z",
+          "location_checked_at": "2026-11-18T14:44:44Z",
           "location_status": "found",
           "out_reason": null,
           "owner_name": "Sam Staff",
@@ -3789,7 +3954,7 @@
           "id": 5,
           "is_internal": false,
           "link_type": "original",
-          "location_checked_at": "2026-11-17T20:42:23Z",
+          "location_checked_at": "2026-11-18T14:44:44Z",
           "location_status": "found",
           "out_reason": null,
           "owner_name": "Sam Staff",
@@ -3801,18 +3966,44 @@
           "subject": "Did you receive our ASR?"
         }
       ],
+      "notes": [],
+      "outlook_ops": [],
+      "outlook_pending": null,
+      "ownership": [],
+      "pending_ops": [
+        {
+          "attempts": 0,
+          "created_at": "2026-11-18T14:44:44Z",
+          "hold_reason": "before_identity",
+          "last_error": null,
+          "op_id": "fa786cb5-930c-493f-a000-a6f0cfa2a9fe",
+          "op_type": "email.attach",
+          "staff_name": "Sam Staff",
+          "state": "held"
+        },
+        {
+          "attempts": 0,
+          "created_at": "2026-11-18T14:44:44Z",
+          "hold_reason": "before_identity",
+          "last_error": null,
+          "op_id": "2f2f4786-ebbc-4d95-89e9-e534bbd3ffc3",
+          "op_type": "ticket.create",
+          "staff_name": "Sam Staff",
+          "state": "held"
+        }
+      ],
       "schools": [
         1
       ],
       "ticket": {
-        "assigned_at": "2026-11-17T20:42:23Z",
+        "assigned_at": "2026-11-18T14:44:44Z",
         "assigned_staff": null,
         "assignee_name": "Sam Staff",
         "assignee_staff_id": 1,
         "classification_confidence": 0.86,
         "completed_at": null,
         "conversation_id": "C-5",
-        "created_at": "2026-11-17T20:42:23Z",
+        "created_at": "2026-11-18T14:44:44Z",
         "display_id": "T-000005",
         "first_received_at": "2026-11-11T19:20:00Z",
         "id": 5,
@@ -3830,19 +4021,24 @@
         "possible_duplicate_of": null,
         "priority": "Normal",
         "resolution_notes": null,
+        "review_reason": null,
         "school_name": "Pine Grove School",
         "school_njiis_id": "0034567",
         "school_verification": "Extracted - Not Verified",
-        "scope_changed_at": "2026-11-17T20:42:23Z",
+        "scope_changed_at": "2026-11-18T14:44:44Z",
         "scope_reason": null,
         "scope_state": "current",
         "sender_email": "tbaker@pinegrove.example.org",
         "sender_name": "Tom Baker",
+        "shared_refreshed_at": null,
+        "shared_state": "queued",
+        "shared_version": 0,
         "source": "outlook",
         "staff_actions": null,
         "status": "Assigned",
+        "sync_state": "pending",
         "ticket_ref": "ASR-5CC2B0C2",
-        "updated_at": "2026-11-17T20:42:23Z"
+        "updated_at": "2026-11-18T14:44:44Z"
       }
     },
     "6": {
@@ -3851,13 +4047,15 @@
         {
           "attempts": 1,
           "dest_path": "Inbox/Completed",
-          "flagged_at": "2026-11-17T20:42:23Z",
+          "flagged_at": "2026-11-18T14:44:44Z",
           "last_error": null,
           "last_error_at": null,
           "message_id": 7,
-          "moved_at": "2026-11-17T20:42:23Z"
+          "moved_at": "2026-11-18T14:44:44Z"
         }
       ],
+      "completions": [],
+      "conflicts": [],
       "fields": [
         {
           "effective": "Ava",
@@ -3866,7 +4064,7 @@
           "key": "contact_first_name",
           "manual_value": null,
           "state": "Extracted - Not Verified",
-          "updated_at": "2026-11-17T20:42:23Z",
+          "updated_at": "2026-11-18T14:44:44Z",
           "verified": false
         },
         {
@@ -3876,7 +4074,7 @@
           "key": "form_type",
           "manual_value": null,
           "state": "Extracted - Not Verified",
-          "updated_at": "2026-11-17T20:42:23Z",
+          "updated_at": "2026-11-18T14:44:44Z",
           "verified": false
         },
         {
@@ -3886,7 +4084,7 @@
           "key": "issue_description",
           "manual_value": null,
           "state": "Extracted - Not Verified",
-          "updated_at": "2026-11-17T20:42:23Z",
+          "updated_at": "2026-11-18T14:44:44Z",
           "verified": false
         }
       ],
@@ -3894,25 +4092,25 @@
         {
           "action": "Moved to Ticket History: Completed",
           "actor": "Sam Staff",
-          "at": "2026-11-17T20:42:23Z",
+          "at": "2026-11-18T14:44:44Z",
           "field": "scope",
           "id": 29,
           "new_value": "history",
           "old_value": "current"
         },
         {
-          "action": "Marked Done: 1 email(s) flagged complete and moved to Inbox/Completed",
+          "action": "Outlook updated after Mark Done",
           "actor": "Sam Staff",
-          "at": "2026-11-17T20:42:23Z",
-          "field": "status",
+          "at": "2026-11-18T14:44:44Z",
+          "field": null,
           "id": 28,
-          "new_value": "Done",
-          "old_value": "Assigned"
+          "new_value": "1 email(s) flagged complete and moved to Inbox/Completed",
+          "old_value": null
         },
         {
           "action": "Status changed",
           "actor": "system",
-          "at": "2026-11-17T20:42:23Z",
+          "at": "2026-11-18T14:44:44Z",
           "field": "status",
           "id": 19,
           "new_value": "Assigned",
@@ -3921,7 +4119,7 @@
         {
           "action": "Owner updated from Outlook folder (no notification)",
           "actor": "system",
-          "at": "2026-11-17T20:42:23Z",
+          "at": "2026-11-18T14:44:44Z",
           "field": "assignee",
           "id": 18,
           "new_value": "Sam Staff",
@@ -3930,7 +4128,7 @@
         {
           "action": "Ticket created from Outlook email",
           "actor": "system",
-          "at": "2026-11-17T20:42:23Z",
+          "at": "2026-11-18T14:44:44Z",
           "field": "issue_type",
           "id": 7,
           "new_value": "user_guide",
@@ -3954,7 +4152,7 @@
           "id": 7,
           "is_internal": false,
           "link_type": "original",
-          "location_checked_at": "2026-11-17T20:42:23Z",
+          "location_checked_at": "2026-11-18T14:44:44Z",
           "location_status": "found",
           "out_reason": "completed",
           "owner_name": "Sam Staff",
@@ -3966,18 +4164,34 @@
           "subject": "User guide"
         }
       ],
+      "notes": [],
+      "outlook_ops": [],
+      "outlook_pending": null,
+      "ownership": [],
+      "pending_ops": [
+        {
+          "attempts": 0,
+          "created_at": "2026-11-18T14:44:44Z",
+          "hold_reason": "before_identity",
+          "last_error": null,
+          "op_id": "9d69a04e-a2a1-4e37-81bc-8bd406b4507a",
+          "op_type": "ticket.create",
+          "staff_name": "Sam Staff",
+          "state": "held"
+        }
+      ],
       "schools": [
         1
       ],
       "ticket": {
-        "assigned_at": "2026-11-17T20:42:23Z",
+        "assigned_at": "2026-11-18T14:44:44Z",
         "assigned_staff": null,
         "assignee_name": "Sam Staff",
         "assignee_staff_id": 1,
         "classification_confidence": 0.9,
-        "completed_at": "2026-11-17T20:42:23Z",
+        "completed_at": null,
         "conversation_id": "C-7",
-        "created_at": "2026-11-17T20:42:23Z",
+        "created_at": "2026-11-18T14:44:44Z",
         "display_id": "T-000006",
         "first_received_at": "2026-11-09T12:00:00Z",
         "id": 6,
@@ -3995,24 +4209,31 @@
         "possible_duplicate_of": null,
         "priority": "Normal",
         "resolution_notes": null,
+        "review_reason": null,
         "school_name": null,
         "school_njiis_id": null,
         "school_verification": "Unverified School",
-        "scope_changed_at": "2026-11-17T20:42:23Z",
+        "scope_changed_at": "2026-11-18T14:44:44Z",
         "scope_reason": "completed",
         "scope_state": "history",
         "sender_email": "achen@lakeside.example.org",
         "sender_name": "Ava Chen",
+        "shared_refreshed_at": null,
+        "shared_state": "queued",
+        "shared_version": 0,
         "source": "outlook",
         "staff_actions": null,
-        "status": "Done",
+        "status": "Assigned",
+        "sync_state": "pending",
         "ticket_ref": "ASR-338C57AF",
-        "updated_at": "2026-11-17T20:42:23Z"
+        "updated_at": "2026-11-18T14:44:44Z"
       }
     },
     "7": {
       "assignments": [],
       "completion": [],
+      "completions": [],
+      "conflicts": [],
       "fields": [
         {
           "effective": "Noah",
@@ -4021,7 +4242,7 @@
           "key": "contact_first_name",
           "manual_value": null,
           "state": "Extracted - Not Verified",
-          "updated_at": "2026-11-17T20:42:23Z",
+          "updated_at": "2026-11-18T14:44:44Z",
           "verified": false
         },
         {
@@ -4031,7 +4252,7 @@
           "key": "issue_description",
           "manual_value": null,
           "state": "Extracted - Not Verified",
-          "updated_at": "2026-11-17T20:42:23Z",
+          "updated_at": "2026-11-18T14:44:44Z",
           "verified": false
         }
       ],
@@ -4039,7 +4260,7 @@
         {
           "action": "Ticket created from Outlook email",
           "actor": "system",
-          "at": "2026-11-17T20:42:23Z",
+          "at": "2026-11-18T14:44:44Z",
           "field": "issue_type",
           "id": 8,
           "new_value": "other",
@@ -4063,7 +4284,7 @@
           "id": 8,
           "is_internal": false,
           "link_type": "original",
-          "location_checked_at": "2026-11-17T20:42:23Z",
+          "location_checked_at": "2026-11-18T14:44:44Z",
           "location_status": "found",
           "out_reason": null,
           "owner_name": null,
@@ -4073,6 +4294,22 @@
           "sender_name": "Noah Patel",
           "store_id": "DEMO-STORE",
           "subject": "Question"
+        }
+      ],
+      "notes": [],
+      "outlook_ops": [],
+      "outlook_pending": null,
+      "ownership": [],
+      "pending_ops": [
+        {
+          "attempts": 0,
+          "created_at": "2026-11-18T14:44:44Z",
+          "hold_reason": "before_identity",
+          "last_error": null,
+          "op_id": "a74f6d70-7982-4b2d-84a8-61a0ad83449d",
+          "op_type": "ticket.create",
+          "staff_name": "Sam Staff",
+          "state": "held"
         }
       ],
       "schools": [
@@ -4086,7 +4323,7 @@
         "classification_confidence": 0.0,
         "completed_at": null,
         "conversation_id": "C-8",
-        "created_at": "2026-11-17T20:42:23Z",
+        "created_at": "2026-11-18T14:44:44Z",
         "display_id": "T-000007",
         "first_received_at": "2026-11-16T17:40:00Z",
         "id": 7,
@@ -4104,24 +4341,31 @@
         "possible_duplicate_of": null,
         "priority": "Normal",
         "resolution_notes": null,
+        "review_reason": null,
         "school_name": null,
         "school_njiis_id": null,
         "school_verification": "Unverified School",
-        "scope_changed_at": "2026-11-17T20:42:23Z",
+        "scope_changed_at": "2026-11-18T14:44:44Z",
         "scope_reason": null,
         "scope_state": "current",
         "sender_email": "npatel@sunrise.example.org",
         "sender_name": "Noah Patel",
+        "shared_refreshed_at": null,
+        "shared_state": "queued",
+        "shared_version": 0,
         "source": "outlook",
         "staff_actions": null,
         "status": "Unassigned",
+        "sync_state": "pending",
         "ticket_ref": "ASR-500D7395",
-        "updated_at": "2026-11-17T20:42:23Z"
+        "updated_at": "2026-11-18T14:44:44Z"
       }
     },
     "8": {
       "assignments": [],
       "completion": [],
+      "completions": [],
+      "conflicts": [],
       "fields": [
         {
           "effective": "Grace",
@@ -4130,7 +4374,7 @@
           "key": "contact_first_name",
           "manual_value": null,
           "state": "Extracted - Not Verified",
-          "updated_at": "2026-11-17T20:42:23Z",
+          "updated_at": "2026-11-18T14:44:44Z",
           "verified": false
         },
         {
@@ -4140,7 +4384,7 @@
           "key": "form_type",
           "manual_value": null,
           "state": "Extracted - Not Verified",
-          "updated_at": "2026-11-17T20:42:23Z",
+          "updated_at": "2026-11-18T14:44:44Z",
           "verified": false
         },
         {
@@ -4150,7 +4394,7 @@
           "key": "issue_description",
           "manual_value": null,
           "state": "Extracted - Not Verified",
-          "updated_at": "2026-11-17T20:42:23Z",
+          "updated_at": "2026-11-18T14:44:44Z",
           "verified": false
         },
         {
@@ -4160,7 +4404,7 @@
           "key": "school_name",
           "manual_value": null,
           "state": "Extracted - Not Verified",
-          "updated_at": "2026-11-17T20:42:23Z",
+          "updated_at": "2026-11-18T14:44:44Z",
           "verified": false
         },
         {
@@ -4170,7 +4414,7 @@
           "key": "sender_title",
           "manual_value": null,
           "state": "Extracted - Not Verified",
-          "updated_at": "2026-11-17T20:42:23Z",
+          "updated_at": "2026-11-18T14:44:44Z",
           "verified": false
         }
       ],
@@ -4178,7 +4422,7 @@
         {
           "action": "Status changed",
           "actor": "system",
-          "at": "2026-11-17T20:42:23Z",
+          "at": "2026-11-18T14:44:44Z",
           "field": "status",
           "id": 21,
           "new_value": "Assigned",
@@ -4187,7 +4431,7 @@
         {
           "action": "Owner updated from Outlook folder (no notification)",
           "actor": "system",
-          "at": "2026-11-17T20:42:23Z",
+          "at": "2026-11-18T14:44:44Z",
           "field": "assignee",
           "id": 20,
           "new_value": "Sam Staff",
@@ -4196,7 +4440,7 @@
         {
           "action": "Ticket created from Outlook email",
           "actor": "system",
-          "at": "2026-11-17T20:42:23Z",
+          "at": "2026-11-18T14:44:44Z",
           "field": "issue_type",
           "id": 9,
           "new_value": "save_form_pdf",
@@ -4220,7 +4464,7 @@
           "id": 9,
           "is_internal": false,
           "link_type": "original",
-          "location_checked_at": "2026-11-17T20:42:23Z",
+          "location_checked_at": "2026-11-18T14:44:44Z",
           "location_status": "found",
           "out_reason": null,
           "owner_name": "Sam Staff",
@@ -4232,18 +4476,34 @@
           "subject": "Save ASR as PDF"
         }
       ],
+      "notes": [],
+      "outlook_ops": [],
+      "outlook_pending": null,
+      "ownership": [],
+      "pending_ops": [
+        {
+          "attempts": 0,
+          "created_at": "2026-11-18T14:44:44Z",
+          "hold_reason": "before_identity",
+          "last_error": null,
+          "op_id": "22b60677-722b-4f58-ac54-a0631efb669d",
+          "op_type": "ticket.create",
+          "staff_name": "Sam Staff",
+          "state": "held"
+        }
+      ],
       "schools": [
         1
       ],
       "ticket": {
-        "assigned_at": "2026-11-17T20:42:23Z",
+        "assigned_at": "2026-11-18T14:44:44Z",
         "assigned_staff": null,
         "assignee_name": "Sam Staff",
         "assignee_staff_id": 1,
         "classification_confidence": 0.8,
         "completed_at": null,
         "conversation_id": "C-9",
-        "created_at": "2026-11-17T20:42:23Z",
+        "created_at": "2026-11-18T14:44:44Z",
         "display_id": "T-000008",
         "first_received_at": "2026-11-17T14:15:00Z",
         "id": 8,
@@ -4261,19 +4521,24 @@
         "possible_duplicate_of": null,
         "priority": "Normal",
         "resolution_notes": null,
+        "review_reason": null,
         "school_name": "Meadow View School",
         "school_njiis_id": null,
         "school_verification": "Unverified School",
-        "scope_changed_at": "2026-11-17T20:42:23Z",
+        "scope_changed_at": "2026-11-18T14:44:44Z",
         "scope_reason": null,
         "scope_state": "current",
         "sender_email": "gkim@meadow.example.org",
         "sender_name": "Grace Kim",
+        "shared_refreshed_at": null,
+        "shared_state": "queued",
+        "shared_version": 0,
         "source": "outlook",
         "staff_actions": null,
         "status": "Assigned",
+        "sync_state": "pending",
         "ticket_ref": "ASR-1B3A2055",
-        "updated_at": "2026-11-17T20:42:23Z"
+        "updated_at": "2026-11-18T14:44:44Z"
       }
     }
   },
@@ -4453,17 +4718,19 @@
         "folder_path": null,
         "in_progress": 0,
         "name": "Unassigned",
+        "review": 0,
         "staff_id": null,
         "unassigned": 1
       },
       {
         "active": true,
         "assigned": 4,
-        "done": 1,
+        "done": 0,
         "folder_in_scope": true,
         "folder_path": "Inbox/My Folder",
         "in_progress": 1,
         "name": "Sam Staff",
+        "review": 0,
         "staff_id": 1,
         "unassigned": 0
       },
@@ -4475,6 +4742,7 @@
         "folder_path": "Inbox/Teammate A",
         "in_progress": 0,
         "name": "Teammate A",
+        "review": 0,
         "staff_id": 2,
         "unassigned": 0
       },
@@ -4486,6 +4754,7 @@
         "folder_path": "Inbox/Teammate B",
         "in_progress": 0,
         "name": "Teammate B",
+        "review": 0,
         "staff_id": 3,
         "unassigned": 0
       }
@@ -4562,11 +4831,7 @@
     "by_status": [
       [
         "Assigned",
-        5
-      ],
-      [
-        "Done",
-        1
+        6
       ],
       [
         "In Progress",
@@ -4586,7 +4851,7 @@
     "created_last_30_days": 8,
     "created_last_7_days": 8,
     "followups_due": 0,
-    "open": 7,
+    "open": 8,
     "open_older_than_7_days": 0,
     "outlook_drafts_created": 0,
     "total": 8
@@ -4610,6 +4875,7 @@
     "close_to_tray": true,
     "default_assigned_staff": "",
     "duplicate_window_days": 14,
+    "excluded_folders": [],
     "folder": {
       "entry_id": "F-INBOX",
       "path": "Inbox",
@@ -4641,6 +4907,9 @@
     "selected_with_children": [
       "F-MY"
     ],
+    "shared_db_path": "\\\\epi-qb-5\\VPD_Shared\\PgmDocs\\Assessment and Coverage\\Annual Immunization Status Report\\ASR Master List Revamp--2023\\asr_email_support.accdb",
+    "shared_mode": "shared",
+    "shared_sync_minutes": 2,
     "staff_name": "Sam Staff",
     "subfolder_mode": "selected",
     "sync_enabled": true
@@ -4648,46 +4917,52 @@
   "staff": [
     {
       "active": true,
-      "created_at": "2026-11-17T20:42:23Z",
+      "created_at": "2026-11-18T14:44:44Z",
       "display_name": "Sam Staff",
       "email": "sam.staff@helpdesk.example.gov",
       "folder_entry_id": "F-MY",
       "folder_path": "Inbox/My Folder",
       "id": 1,
       "mailbox_name": "Help Desk Shared Mailbox (demo)",
+      "shared_id": "99e45516-eb5f-4ac9-8aad-cc0f5956a8c3",
       "store_id": "DEMO-STORE",
-      "updated_at": "2026-11-17T20:42:23Z"
+      "updated_at": "2026-11-18T14:44:44Z",
+      "windows_account": null
     },
     {
       "active": true,
-      "created_at": "2026-11-17T20:42:23Z",
+      "created_at": "2026-11-18T14:44:44Z",
       "display_name": "Teammate A",
       "email": "teammate.a@helpdesk.example.gov",
       "folder_entry_id": "F-TA",
       "folder_path": "Inbox/Teammate A",
       "id": 2,
       "mailbox_name": "Help Desk Shared Mailbox (demo)",
+      "shared_id": "b4641390-7dc5-48e0-ae9c-5198e7dff9c6",
       "store_id": "DEMO-STORE",
-      "updated_at": "2026-11-17T20:42:23Z"
+      "updated_at": "2026-11-18T14:44:44Z",
+      "windows_account": null
     },
     {
       "active": true,
-      "created_at": "2026-11-17T20:42:23Z",
+      "created_at": "2026-11-18T14:44:44Z",
       "display_name": "Teammate B",
       "email": "teammate.b@helpdesk.example.gov",
       "folder_entry_id": "F-TB",
       "folder_path": "Inbox/Teammate B",
       "id": 3,
       "mailbox_name": "Help Desk Shared Mailbox (demo)",
+      "shared_id": "ac11bbb1-fa1a-4384-93c0-5806307d108f",
       "store_id": "DEMO-STORE",
-      "updated_at": "2026-11-17T20:42:23Z"
+      "updated_at": "2026-11-18T14:44:44Z",
+      "windows_account": null
     }
   ],
   "templates": [
     {
       "asserts": [],
       "body_html": "<p>Hello {{contact_first_name}},</p>\n<p>Please enroll your school in NJIIS through here <a href=\"https://njiis.nj.gov/core/web/index.html#/home/newEnrollment\" rel=\"noopener noreferrer\">https://njiis.nj.gov/core/web/index.html#/home/newEnrollment</a></p>\n<p>Please note that only information needed is those with red asterisk (*). Make sure to add your user account information as a user in the form so they can assign you to this school.</p>\n<p>You can view our FAQ, which can help you complete the enrollment form, through here <a href=\"https://njiis.nj.gov/docs/schoolForms/NJIISSchoolReportFAQs.pdf\" rel=\"noopener noreferrer\">https://njiis.nj.gov/docs/schoolForms/NJIISSchoolReportFAQs.pdf</a></p>\n<p>Let me know if you have further questions.</p>\n<p>Thank you,</p>",
-      "created_at": "2026-11-17T20:42:23Z",
+      "created_at": "2026-11-18T14:44:44Z",
       "default_body_html": "<p>Hello {{contact_first_name}},</p>\n<p>Please enroll your school in NJIIS through here <a href=\"https://njiis.nj.gov/core/web/index.html#/home/newEnrollment\" rel=\"noopener noreferrer\">https://njiis.nj.gov/core/web/index.html#/home/newEnrollment</a></p>\n<p>Please note that only information needed is those with red asterisk (*). Make sure to add your user account information as a user in the form so they can assign you to this school.</p>\n<p>You can view our FAQ, which can help you complete the enrollment form, through here <a href=\"https://njiis.nj.gov/docs/schoolForms/NJIISSchoolReportFAQs.pdf\" rel=\"noopener noreferrer\">https://njiis.nj.gov/docs/schoolForms/NJIISSchoolReportFAQs.pdf</a></p>\n<p>Let me know if you have further questions.</p>\n<p>Thank you,</p>",
       "default_subject": "RE: {{original_subject}}",
       "description": "Link to the NJIIS enrollment form and FAQ.",
@@ -4696,7 +4971,7 @@
       "is_customized": false,
       "is_system": true,
       "issue_type": "school_enrollment",
-      "last_modified": "2026-11-17T20:42:23Z",
+      "last_modified": "2026-11-18T14:44:44Z",
       "name": "Enrollment instructions",
       "optional_fields": [
         "contact_first_name"
@@ -4722,7 +4997,7 @@
         }
       ],
       "body_html": "<p>Hi {{contact_first_name}},</p>\n<p>Thanks for the information. I have updated NJIIS. Please log back in and try again.</p>\n<p>School: {{school_name}} (School NJIIS ID: {{school_njiis_id}}) – School subtype: {{school_type}}</p>\n<p>Please let me know if you have any other problems.</p>\n<p>Thanks.</p>",
-      "created_at": "2026-11-17T20:42:23Z",
+      "created_at": "2026-11-18T14:44:44Z",
       "default_body_html": "<p>Hi {{contact_first_name}},</p>\n<p>Thanks for the information. I have updated NJIIS. Please log back in and try again.</p>\n<p>School: {{school_name}} (School NJIIS ID: {{school_njiis_id}}) – School subtype: {{school_type}}</p>\n<p>Please let me know if you have any other problems.</p>\n<p>Thanks.</p>",
       "default_subject": "RE: {{original_subject}}",
       "description": "Sent after staff updated the subtype in NJIIS.",
@@ -4731,7 +5006,7 @@
       "is_customized": false,
       "is_system": true,
       "issue_type": "school_subtype_missing",
-      "last_modified": "2026-11-17T20:42:23Z",
+      "last_modified": "2026-11-18T14:44:44Z",
       "name": "Confirm subtype updated",
       "optional_fields": [
         "contact_first_name"
@@ -4761,7 +5036,7 @@
     {
       "asserts": [],
       "body_html": "<p>Hello {{contact_first_name}},</p>\n<p>It seems your school is missing the subtype. Can you let me know whether your school ({{school_name}}, School NJIIS ID: {{school_njiis_id}}) is Charter, Public, or Private? Once I get that info, I will update NJIIS and you should be able to complete your ASR after that point.</p>\n<p>Thanks.</p>",
-      "created_at": "2026-11-17T20:42:23Z",
+      "created_at": "2026-11-18T14:44:44Z",
       "default_body_html": "<p>Hello {{contact_first_name}},</p>\n<p>It seems your school is missing the subtype. Can you let me know whether your school ({{school_name}}, School NJIIS ID: {{school_njiis_id}}) is Charter, Public, or Private? Once I get that info, I will update NJIIS and you should be able to complete your ASR after that point.</p>\n<p>Thanks.</p>",
       "default_subject": "School Subtype Error",
       "description": "Ask whether the school is Charter, Public or Private.",
@@ -4770,7 +5045,7 @@
       "is_customized": false,
       "is_system": true,
       "issue_type": "school_subtype_missing",
-      "last_modified": "2026-11-17T20:42:23Z",
+      "last_modified": "2026-11-18T14:44:44Z",
       "name": "Request subtype",
       "optional_fields": [
         "school_name",
@@ -4800,7 +5075,7 @@
     {
       "asserts": [],
       "body_html": "<p>Hi {{contact_first_name}},</p>\n<p>Thanks for the information. I have noted that {{school_name}} (School NJIIS ID: {{school_njiis_id}}) is a {{school_type}} school. I will update NJIIS and you should be able to complete your ASR after that point. I will let you know once the update has been made.</p>\n<p>Please let me know if you have any other problems.</p>\n<p>Thanks.</p>",
-      "created_at": "2026-11-17T20:42:23Z",
+      "created_at": "2026-11-18T14:44:44Z",
       "default_body_html": "<p>Hi {{contact_first_name}},</p>\n<p>Thanks for the information. I have noted that {{school_name}} (School NJIIS ID: {{school_njiis_id}}) is a {{school_type}} school. I will update NJIIS and you should be able to complete your ASR after that point. I will let you know once the update has been made.</p>\n<p>Please let me know if you have any other problems.</p>\n<p>Thanks.</p>",
       "default_subject": "RE: {{original_subject}}",
       "description": "Subtype is known but the NJIIS update is not yet confirmed.",
@@ -4809,7 +5084,7 @@
       "is_customized": false,
       "is_system": true,
       "issue_type": "school_subtype_missing",
-      "last_modified": "2026-11-17T20:42:23Z",
+      "last_modified": "2026-11-18T14:44:44Z",
       "name": "Subtype received - update pending",
       "optional_fields": [
         "contact_first_name"
@@ -4839,7 +5114,7 @@
         }
       ],
       "body_html": "<p>Hi {{contact_first_name}},</p>\n<p>Thanks for the information. I have updated NJIIS. Please log back in and try again.</p>\n<p>School: {{school_name}} (School NJIIS ID: {{school_njiis_id}}) – School subtype: {{school_type}}</p>\n<p>Please let me know if you have any other problems.</p>\n<p>Thanks.</p>",
-      "created_at": "2026-11-17T20:42:23Z",
+      "created_at": "2026-11-18T14:44:44Z",
       "default_body_html": "<p>Hi {{contact_first_name}},</p>\n<p>Thanks for the information. I have updated NJIIS. Please log back in and try again.</p>\n<p>School: {{school_name}} (School NJIIS ID: {{school_njiis_id}}) – School subtype: {{school_type}}</p>\n<p>Please let me know if you have any other problems.</p>\n<p>Thanks.</p>",
       "default_subject": "RE: {{original_subject}}",
       "description": "Sent after staff updated the subtype in NJIIS.",
@@ -4848,7 +5123,7 @@
       "is_customized": false,
       "is_system": true,
       "issue_type": "school_subtype_updated",
-      "last_modified": "2026-11-17T20:42:23Z",
+      "last_modified": "2026-11-18T14:44:44Z",
       "name": "Confirm subtype updated",
       "optional_fields": [
         "contact_first_name"
@@ -4878,7 +5153,7 @@
     {
       "asserts": [],
       "body_html": "<p>Hi {{contact_first_name}},</p>\n<p>Thanks for the information. I have noted that {{school_name}} (School NJIIS ID: {{school_njiis_id}}) is a {{school_type}} school. I will update NJIIS and you should be able to complete your ASR after that point. I will let you know once the update has been made.</p>\n<p>Please let me know if you have any other problems.</p>\n<p>Thanks.</p>",
-      "created_at": "2026-11-17T20:42:23Z",
+      "created_at": "2026-11-18T14:44:44Z",
       "default_body_html": "<p>Hi {{contact_first_name}},</p>\n<p>Thanks for the information. I have noted that {{school_name}} (School NJIIS ID: {{school_njiis_id}}) is a {{school_type}} school. I will update NJIIS and you should be able to complete your ASR after that point. I will let you know once the update has been made.</p>\n<p>Please let me know if you have any other problems.</p>\n<p>Thanks.</p>",
       "default_subject": "RE: {{original_subject}}",
       "description": "Used until staff verify the NJIIS update.",
@@ -4887,7 +5162,7 @@
       "is_customized": false,
       "is_system": true,
       "issue_type": "school_subtype_updated",
-      "last_modified": "2026-11-17T20:42:23Z",
+      "last_modified": "2026-11-18T14:44:44Z",
       "name": "Subtype received - update pending",
       "optional_fields": [
         "contact_first_name"
@@ -4917,7 +5192,7 @@
         }
       ],
       "body_html": "<p>Hello {{contact_first_name}},</p>\n<p>Your account has been activated, and you should now have access to the School Forms module and ASR for {{school_name}}.</p>\n<p>If you are still having problems, please try the following:</p>\n<ol>\n<li>Clear browser cache</li>\n<li>Close browser</li>\n<li>Open browser</li>\n<li>Access NJIIS</li>\n</ol>\n<p>Thank you,</p>",
-      "created_at": "2026-11-17T20:42:23Z",
+      "created_at": "2026-11-18T14:44:44Z",
       "default_body_html": "<p>Hello {{contact_first_name}},</p>\n<p>Your account has been activated, and you should now have access to the School Forms module and ASR for {{school_name}}.</p>\n<p>If you are still having problems, please try the following:</p>\n<ol>\n<li>Clear browser cache</li>\n<li>Close browser</li>\n<li>Open browser</li>\n<li>Access NJIIS</li>\n</ol>\n<p>Thank you,</p>",
       "default_subject": "RE: {{original_subject}}",
       "description": "Account activated after training.",
@@ -4926,7 +5201,7 @@
       "is_customized": false,
       "is_system": true,
       "issue_type": "asr_training",
-      "last_modified": "2026-11-17T20:42:23Z",
+      "last_modified": "2026-11-18T14:44:44Z",
       "name": "Access activated",
       "optional_fields": [
         "contact_first_name"
@@ -4954,7 +5229,7 @@
     {
       "asserts": [],
       "body_html": "<p>Hello {{contact_first_name}},</p>\n<p>Thank you for letting us know that you completed the ASR training on {{training_date}}. Once the training is completed, please expect to wait a couple of days for your user account to be activated.</p>\n<p>If you do not receive an email from me confirming the new privileges after 2 business days, please reach out to me.</p>\n<p>Let me know if you have further questions.</p>\n<p>Thank you,</p>",
-      "created_at": "2026-11-17T20:42:23Z",
+      "created_at": "2026-11-18T14:44:44Z",
       "default_body_html": "<p>Hello {{contact_first_name}},</p>\n<p>Thank you for letting us know that you completed the ASR training on {{training_date}}. Once the training is completed, please expect to wait a couple of days for your user account to be activated.</p>\n<p>If you do not receive an email from me confirming the new privileges after 2 business days, please reach out to me.</p>\n<p>Let me know if you have further questions.</p>\n<p>Thank you,</p>",
       "default_subject": "RE: {{original_subject}}",
       "description": "Training is complete; activation takes a couple of days.",
@@ -4963,7 +5238,7 @@
       "is_customized": false,
       "is_system": true,
       "issue_type": "asr_training",
-      "last_modified": "2026-11-17T20:42:23Z",
+      "last_modified": "2026-11-18T14:44:44Z",
       "name": "Access follow-up after training",
       "optional_fields": [
         "contact_first_name"
@@ -4995,7 +5270,7 @@
     {
       "asserts": [],
       "body_html": "<p>Hello {{contact_first_name}},</p>\n<p>Have you completed the ASR training? Once the training is completed, please expect to wait a couple of days for your user account to be activated.</p>\n<p>To register to the Annual Immunization Report (ASR) training, please go to the <a href=\"https://njiis.nj.gov/core/web/index.html#/home/training\" rel=\"noopener noreferrer\">NJIIS Training Opportunities</a> (<a href=\"https://njiis.nj.gov/core/web/index.html#/home/training\" rel=\"noopener noreferrer\">https://njiis.nj.gov/core/web/index.html#/home/training</a>), find the <em>NJIIS Training Access to On-Demand Webinar Recordings</em> table, and enroll into the Annual Immunization Status Report (ASR) Training by clicking “View.”</p>\n<p>This training will walk you through the new ASR.</p>\n<p>Let me know if you have further questions.</p>\n<p>Thank you,</p>",
-      "created_at": "2026-11-17T20:42:23Z",
+      "created_at": "2026-11-18T14:44:44Z",
       "default_body_html": "<p>Hello {{contact_first_name}},</p>\n<p>Have you completed the ASR training? Once the training is completed, please expect to wait a couple of days for your user account to be activated.</p>\n<p>To register to the Annual Immunization Report (ASR) training, please go to the <a href=\"https://njiis.nj.gov/core/web/index.html#/home/training\" rel=\"noopener noreferrer\">NJIIS Training Opportunities</a> (<a href=\"https://njiis.nj.gov/core/web/index.html#/home/training\" rel=\"noopener noreferrer\">https://njiis.nj.gov/core/web/index.html#/home/training</a>), find the <em>NJIIS Training Access to On-Demand Webinar Recordings</em> table, and enroll into the Annual Immunization Status Report (ASR) Training by clicking “View.”</p>\n<p>This training will walk you through the new ASR.</p>\n<p>Let me know if you have further questions.</p>\n<p>Thank you,</p>",
       "default_subject": "RE: {{original_subject}}",
       "description": "How to register for the on-demand ASR training.",
@@ -5004,7 +5279,7 @@
       "is_customized": false,
       "is_system": true,
       "issue_type": "asr_training",
-      "last_modified": "2026-11-17T20:42:23Z",
+      "last_modified": "2026-11-18T14:44:44Z",
       "name": "ASR training instructions",
       "optional_fields": [
         "contact_first_name"
@@ -5023,7 +5298,7 @@
     {
       "asserts": [],
       "body_html": "<p>Hello {{contact_first_name}},</p>\n<p>Thank you for letting us know that you completed the Local Health Dept Immunization Audit Training on {{training_date}}. Once the training is completed, please expect to wait a couple of days for your user account to be activated.</p>\n<p>If you do not receive an email from me confirming the new privileges after 2 business days, please reach out to me.</p>\n<p>Let me know if you have further questions.</p>\n<p>Thank you,</p>",
-      "created_at": "2026-11-17T20:42:23Z",
+      "created_at": "2026-11-18T14:44:44Z",
       "default_body_html": "<p>Hello {{contact_first_name}},</p>\n<p>Thank you for letting us know that you completed the Local Health Dept Immunization Audit Training on {{training_date}}. Once the training is completed, please expect to wait a couple of days for your user account to be activated.</p>\n<p>If you do not receive an email from me confirming the new privileges after 2 business days, please reach out to me.</p>\n<p>Let me know if you have further questions.</p>\n<p>Thank you,</p>",
       "default_subject": "RE: {{original_subject}}",
       "description": "Training complete; activation pending.",
@@ -5032,7 +5307,7 @@
       "is_customized": false,
       "is_system": true,
       "issue_type": "lhd_training",
-      "last_modified": "2026-11-17T20:42:23Z",
+      "last_modified": "2026-11-18T14:44:44Z",
       "name": "Access follow-up after Audit training",
       "optional_fields": [
         "contact_first_name"
@@ -5059,7 +5334,7 @@
     {
       "asserts": [],
       "body_html": "<p>Hello {{contact_first_name}},</p>\n<p>Have you completed the Audit training? Once the training is completed, please expect to wait a couple of days for your user account to be activated.</p>\n<p>To register to the Local Health Dept Immunization Audit Training, please go to the <a href=\"https://njiis.nj.gov/core/web/index.html#/home/training\" rel=\"noopener noreferrer\">NJIIS Training Opportunities</a> (<a href=\"https://njiis.nj.gov/core/web/index.html#/home/training\" rel=\"noopener noreferrer\">https://njiis.nj.gov/core/web/index.html#/home/training</a>), find the <em>NJIIS Training Access to On-Demand Webinar Recordings</em> table, and enroll into the <strong>Local Health Dept Immunization Audit Training</strong> by clicking “View.”</p>\n<p>This training will walk you through the new Audit form.</p>\n<p>If you do not receive an email from me confirming the new privileges after 2 business days, please reach out to me.</p>\n<p>Let me know if you have further questions.</p>\n<p>Thank you,</p>",
-      "created_at": "2026-11-17T20:42:23Z",
+      "created_at": "2026-11-18T14:44:44Z",
       "default_body_html": "<p>Hello {{contact_first_name}},</p>\n<p>Have you completed the Audit training? Once the training is completed, please expect to wait a couple of days for your user account to be activated.</p>\n<p>To register to the Local Health Dept Immunization Audit Training, please go to the <a href=\"https://njiis.nj.gov/core/web/index.html#/home/training\" rel=\"noopener noreferrer\">NJIIS Training Opportunities</a> (<a href=\"https://njiis.nj.gov/core/web/index.html#/home/training\" rel=\"noopener noreferrer\">https://njiis.nj.gov/core/web/index.html#/home/training</a>), find the <em>NJIIS Training Access to On-Demand Webinar Recordings</em> table, and enroll into the <strong>Local Health Dept Immunization Audit Training</strong> by clicking “View.”</p>\n<p>This training will walk you through the new Audit form.</p>\n<p>If you do not receive an email from me confirming the new privileges after 2 business days, please reach out to me.</p>\n<p>Let me know if you have further questions.</p>\n<p>Thank you,</p>",
       "default_subject": "RE: {{original_subject}}",
       "description": "How to register for the LHD Immunization Audit training.",
@@ -5068,7 +5343,7 @@
       "is_customized": false,
       "is_system": true,
       "issue_type": "lhd_training",
-      "last_modified": "2026-11-17T20:42:23Z",
+      "last_modified": "2026-11-18T14:44:44Z",
       "name": "Audit training instructions",
       "optional_fields": [
         "contact_first_name"
@@ -5094,7 +5369,7 @@
         }
       ],
       "body_html": "<p>Hello {{contact_first_name}},</p>\n<p>I have created your user account. You should receive an email from NJIIS requesting to create a password.</p>\n<p>We have created a user guide to help through the form. You can view it <a href=\"https://njiis.nj.gov/docs/schoolForms/ASRandAuditUserGuide.pdf\" rel=\"noopener noreferrer\">here</a>. If you have any questions and you are not able to find them in the user guide, please do not hesitate to email me.</p>\n<p>Please let me know if you have any questions.</p>\n<p>Thank you,</p>",
-      "created_at": "2026-11-17T20:42:23Z",
+      "created_at": "2026-11-18T14:44:44Z",
       "default_body_html": "<p>Hello {{contact_first_name}},</p>\n<p>I have created your user account. You should receive an email from NJIIS requesting to create a password.</p>\n<p>We have created a user guide to help through the form. You can view it <a href=\"https://njiis.nj.gov/docs/schoolForms/ASRandAuditUserGuide.pdf\" rel=\"noopener noreferrer\">here</a>. If you have any questions and you are not able to find them in the user guide, please do not hesitate to email me.</p>\n<p>Please let me know if you have any questions.</p>\n<p>Thank you,</p>",
       "default_subject": "RE: {{original_subject}}",
       "description": "Sent once the account was created in NJIIS.",
@@ -5103,7 +5378,7 @@
       "is_customized": false,
       "is_system": true,
       "issue_type": "new_user_account",
-      "last_modified": "2026-11-17T20:42:23Z",
+      "last_modified": "2026-11-18T14:44:44Z",
       "name": "Confirm account created",
       "optional_fields": [
         "contact_first_name"
@@ -5130,7 +5405,7 @@
     {
       "asserts": [],
       "body_html": "<p>Hello {{contact_first_name}},</p>\n<p>I can create an account for you. Please provide me with the following information to create your account:</p>\n<div>{{account_details_needed}}</div>\n<p>Please also take the ASR Training course to activate your account. Once the training is completed, please expect to wait a couple of days for your user account to be activated.</p>\n<p>To register to the Annual Immunization Report (ASR) training, please go to the <a href=\"https://njiis.nj.gov/core/web/index.html#/home/training\" rel=\"noopener noreferrer\">NJIIS Training Opportunities</a> (<a href=\"https://njiis.nj.gov/core/web/index.html#/home/training\" rel=\"noopener noreferrer\">https://njiis.nj.gov/core/web/index.html#/home/training</a>), find the <em>NJIIS Training Access to On-Demand Webinar Recordings</em> table, and enroll into the Annual Immunization Status Report (ASR) Training by clicking “View.”</p>\n<p>This training will walk you through the new ASR.</p>\n<p>Let me know if you have further questions.</p>\n<p>Thank you,</p>",
-      "created_at": "2026-11-17T20:42:23Z",
+      "created_at": "2026-11-18T14:44:44Z",
       "default_body_html": "<p>Hello {{contact_first_name}},</p>\n<p>I can create an account for you. Please provide me with the following information to create your account:</p>\n<div>{{account_details_needed}}</div>\n<p>Please also take the ASR Training course to activate your account. Once the training is completed, please expect to wait a couple of days for your user account to be activated.</p>\n<p>To register to the Annual Immunization Report (ASR) training, please go to the <a href=\"https://njiis.nj.gov/core/web/index.html#/home/training\" rel=\"noopener noreferrer\">NJIIS Training Opportunities</a> (<a href=\"https://njiis.nj.gov/core/web/index.html#/home/training\" rel=\"noopener noreferrer\">https://njiis.nj.gov/core/web/index.html#/home/training</a>), find the <em>NJIIS Training Access to On-Demand Webinar Recordings</em> table, and enroll into the Annual Immunization Status Report (ASR) Training by clicking “View.”</p>\n<p>This training will walk you through the new ASR.</p>\n<p>Let me know if you have further questions.</p>\n<p>Thank you,</p>",
       "default_subject": "RE: {{original_subject}}",
       "description": "Request missing account details and point to the ASR training.",
@@ -5139,7 +5414,7 @@
       "is_customized": false,
       "is_system": true,
       "issue_type": "new_user_account",
-      "last_modified": "2026-11-17T20:42:23Z",
+      "last_modified": "2026-11-18T14:44:44Z",
       "name": "Request details + ASR training",
       "optional_fields": [
         "first_name",
@@ -5169,7 +5444,7 @@
     {
       "asserts": [],
       "body_html": "<p>Hello {{contact_first_name}},</p>\n<p>I can create an account for you. Please provide me with the following information to create your account:</p>\n<div>{{account_details_needed}}</div>\n<p>Thank you,</p>",
-      "created_at": "2026-11-17T20:42:23Z",
+      "created_at": "2026-11-18T14:44:44Z",
       "default_body_html": "<p>Hello {{contact_first_name}},</p>\n<p>I can create an account for you. Please provide me with the following information to create your account:</p>\n<div>{{account_details_needed}}</div>\n<p>Thank you,</p>",
       "default_subject": "RE: {{original_subject}}",
       "description": "Training already completed; request only the details still missing.",
@@ -5178,7 +5453,7 @@
       "is_customized": false,
       "is_system": true,
       "issue_type": "new_user_account",
-      "last_modified": "2026-11-17T20:42:23Z",
+      "last_modified": "2026-11-18T14:44:44Z",
       "name": "Request missing account details",
       "optional_fields": [
         "first_name",
@@ -5209,7 +5484,7 @@
         }
       ],
       "body_html": "<p>Hello {{contact_first_name}},</p>\n<p>I have created your user account. You should receive an email from NJIIS requesting to create a password.</p>\n<p>We have created a user guide to help through the form. You can view it <a href=\"https://njiis.nj.gov/docs/schoolForms/ASRandAuditUserGuide.pdf\" rel=\"noopener noreferrer\">here</a>. If you have any questions and you are not able to find them in the user guide, please do not hesitate to email me.</p>\n<p>Please let me know if you have any questions.</p>\n<p>Thank you,</p>",
-      "created_at": "2026-11-17T20:42:23Z",
+      "created_at": "2026-11-18T14:44:44Z",
       "default_body_html": "<p>Hello {{contact_first_name}},</p>\n<p>I have created your user account. You should receive an email from NJIIS requesting to create a password.</p>\n<p>We have created a user guide to help through the form. You can view it <a href=\"https://njiis.nj.gov/docs/schoolForms/ASRandAuditUserGuide.pdf\" rel=\"noopener noreferrer\">here</a>. If you have any questions and you are not able to find them in the user guide, please do not hesitate to email me.</p>\n<p>Please let me know if you have any questions.</p>\n<p>Thank you,</p>",
       "default_subject": "RE: {{original_subject}}",
       "description": "Sent once the account was created in NJIIS.",
@@ -5218,7 +5493,7 @@
       "is_customized": false,
       "is_system": true,
       "issue_type": "new_user_created",
-      "last_modified": "2026-11-17T20:42:23Z",
+      "last_modified": "2026-11-18T14:44:44Z",
       "name": "Confirm account created",
       "optional_fields": [
         "contact_first_name"
@@ -5245,7 +5520,7 @@
     {
       "asserts": [],
       "body_html": "<p>Hello {{contact_first_name}},</p>\n<p>I can create an account for you. Please provide me with the following information to create your account:</p>\n<div>{{account_details_needed}}</div>\n<p>Thank you,</p>",
-      "created_at": "2026-11-17T20:42:23Z",
+      "created_at": "2026-11-18T14:44:44Z",
       "default_body_html": "<p>Hello {{contact_first_name}},</p>\n<p>I can create an account for you. Please provide me with the following information to create your account:</p>\n<div>{{account_details_needed}}</div>\n<p>Thank you,</p>",
       "default_subject": "RE: {{original_subject}}",
       "description": "Used until account creation is verified.",
@@ -5254,7 +5529,7 @@
       "is_customized": false,
       "is_system": true,
       "issue_type": "new_user_created",
-      "last_modified": "2026-11-17T20:42:23Z",
+      "last_modified": "2026-11-18T14:44:44Z",
       "name": "Request missing account details",
       "optional_fields": [
         "first_name",
@@ -5283,7 +5558,7 @@
         }
       ],
       "body_html": "<p>Hello {{contact_first_name}},</p>\n<p>Your account has been activated, and you should now have access to the School Forms module and ASR for {{school_name}}.</p>\n<p>If you are still having problems, please try the following:</p>\n<ol>\n<li>Clear browser cache</li>\n<li>Close browser</li>\n<li>Open browser</li>\n<li>Access NJIIS</li>\n</ol>\n<p>Thank you,</p>",
-      "created_at": "2026-11-17T20:42:23Z",
+      "created_at": "2026-11-18T14:44:44Z",
       "default_body_html": "<p>Hello {{contact_first_name}},</p>\n<p>Your account has been activated, and you should now have access to the School Forms module and ASR for {{school_name}}.</p>\n<p>If you are still having problems, please try the following:</p>\n<ol>\n<li>Clear browser cache</li>\n<li>Close browser</li>\n<li>Open browser</li>\n<li>Access NJIIS</li>\n</ol>\n<p>Thank you,</p>",
       "default_subject": "RE: {{original_subject}}",
       "description": "Account activated; School Forms module and ASR available.",
@@ -5292,7 +5567,7 @@
       "is_customized": false,
       "is_system": true,
       "issue_type": "training_completed_access",
-      "last_modified": "2026-11-17T20:42:23Z",
+      "last_modified": "2026-11-18T14:44:44Z",
       "name": "Access activated",
       "optional_fields": [
         "contact_first_name"
@@ -5320,7 +5595,7 @@
     {
       "asserts": [],
       "body_html": "<p>Hello {{contact_first_name}},</p>\n<p>Thank you for letting us know that you completed the ASR training on {{training_date}}. Once the training is completed, please expect to wait a couple of days for your user account to be activated.</p>\n<p>If you do not receive an email from me confirming the new privileges after 2 business days, please reach out to me.</p>\n<p>Let me know if you have further questions.</p>\n<p>Thank you,</p>",
-      "created_at": "2026-11-17T20:42:23Z",
+      "created_at": "2026-11-18T14:44:44Z",
       "default_body_html": "<p>Hello {{contact_first_name}},</p>\n<p>Thank you for letting us know that you completed the ASR training on {{training_date}}. Once the training is completed, please expect to wait a couple of days for your user account to be activated.</p>\n<p>If you do not receive an email from me confirming the new privileges after 2 business days, please reach out to me.</p>\n<p>Let me know if you have further questions.</p>\n<p>Thank you,</p>",
       "default_subject": "RE: {{original_subject}}",
       "description": "Used until the account activation is verified.",
@@ -5329,7 +5604,7 @@
       "is_customized": false,
       "is_system": true,
       "issue_type": "training_completed_access",
-      "last_modified": "2026-11-17T20:42:23Z",
+      "last_modified": "2026-11-18T14:44:44Z",
       "name": "Activation pending follow-up",
       "optional_fields": [
         "contact_first_name"
@@ -5350,7 +5625,7 @@
     {
       "asserts": [],
       "body_html": "<p>Hello {{contact_first_name}},</p>\n<p>I received a message about difficulty finding the School Forms tab in your NJIIS account. The tab is located on the left side of your screen and looks like the screenshot below. Are you able to see that? Please advise. Thanks.</p>\n<p><img src=\"sop-images/image3.png\" alt=\"School Forms tab in the NJIIS left-side menu\" width=\"268\" height=\"350\"></p>",
-      "created_at": "2026-11-17T20:42:23Z",
+      "created_at": "2026-11-18T14:44:44Z",
       "default_body_html": "<p>Hello {{contact_first_name}},</p>\n<p>I received a message about difficulty finding the School Forms tab in your NJIIS account. The tab is located on the left side of your screen and looks like the screenshot below. Are you able to see that? Please advise. Thanks.</p>\n<p><img src=\"sop-images/image3.png\" alt=\"School Forms tab in the NJIIS left-side menu\" width=\"268\" height=\"350\"></p>",
       "default_subject": "RE: {{original_subject}}",
       "description": "Screenshot of the School Forms tab in the left menu.",
@@ -5359,7 +5634,7 @@
       "is_customized": false,
       "is_system": true,
       "issue_type": "school_forms_tab",
-      "last_modified": "2026-11-17T20:42:23Z",
+      "last_modified": "2026-11-18T14:44:44Z",
       "name": "School Forms tab location",
       "optional_fields": [
         "contact_first_name"
@@ -5378,7 +5653,7 @@
     {
       "asserts": [],
       "body_html": "<p>Hello {{contact_first_name}},</p>\n<p>Thank you for confirming that you changed the main facility to the school on the homepage before going to the audit form. I'm sorry you are still getting access denied.</p>\n<p>To help us look into this, please reply with the following information:</p>\n<ul>\n<li>The school you selected: {{school_name}} (School NJIIS ID: {{school_njiis_id}})</li>\n<li>Your local health department: {{lhd_name}}</li>\n<li>The exact error message you see: {{error_message}}</li>\n<li>A screenshot of the Current Facility and the error, if possible</li>\n</ul>\n<p>Once I hear back, I can give you the facilities in your user account so you can check that way.</p>\n<p>Thank you,</p>",
-      "created_at": "2026-11-17T20:42:23Z",
+      "created_at": "2026-11-18T14:44:44Z",
       "default_body_html": "<p>Hello {{contact_first_name}},</p>\n<p>Thank you for confirming that you changed the main facility to the school on the homepage before going to the audit form. I'm sorry you are still getting access denied.</p>\n<p>To help us look into this, please reply with the following information:</p>\n<ul>\n<li>The school you selected: {{school_name}} (School NJIIS ID: {{school_njiis_id}})</li>\n<li>Your local health department: {{lhd_name}}</li>\n<li>The exact error message you see: {{error_message}}</li>\n<li>A screenshot of the Current Facility and the error, if possible</li>\n</ul>\n<p>Once I hear back, I can give you the facilities in your user account so you can check that way.</p>\n<p>Thank you,</p>",
       "default_subject": "RE: {{original_subject}}",
       "description": "Facility was changed but access is still denied; request troubleshooting details.",
@@ -5387,7 +5662,7 @@
       "is_customized": false,
       "is_system": true,
       "issue_type": "lhd_access_denied",
-      "last_modified": "2026-11-17T20:42:23Z",
+      "last_modified": "2026-11-18T14:44:44Z",
       "name": "Still denied - request details",
       "optional_fields": [
         "school_name",
@@ -5420,7 +5695,7 @@
     {
       "asserts": [],
       "body_html": "<p>Hello {{contact_first_name}},</p>\n<p>Please make sure to change the main facility to the school on the homepage before going to the audit form.</p>\n<p>You can see our user guide <a href=\"https://njiis.nj.gov/docs/schoolForms/ASRandAuditUserGuide.pdf\" rel=\"noopener noreferrer\">here</a> (Pg 22).</p>\n<p>Please let me know if you have any questions.</p>\n<p>Thank you,</p>",
-      "created_at": "2026-11-17T20:42:23Z",
+      "created_at": "2026-11-18T14:44:44Z",
       "default_body_html": "<p>Hello {{contact_first_name}},</p>\n<p>Please make sure to change the main facility to the school on the homepage before going to the audit form.</p>\n<p>You can see our user guide <a href=\"https://njiis.nj.gov/docs/schoolForms/ASRandAuditUserGuide.pdf\" rel=\"noopener noreferrer\">here</a> (Pg 22).</p>\n<p>Please let me know if you have any questions.</p>\n<p>Thank you,</p>",
       "default_subject": "RE: {{original_subject}}",
       "description": "Change the main facility to the school before opening the audit form (user guide p.22).",
@@ -5429,7 +5704,7 @@
       "is_customized": false,
       "is_system": true,
       "issue_type": "lhd_access_denied",
-      "last_modified": "2026-11-17T20:42:23Z",
+      "last_modified": "2026-11-18T14:44:44Z",
       "name": "Change current facility",
       "optional_fields": [
         "contact_first_name"
@@ -5448,7 +5723,7 @@
     {
       "asserts": [],
       "body_html": "<p>Hello {{contact_first_name}},</p>\n<p>On the dropdown, make sure to change to a school. You can see the list on the drop down.</p>\n<p>If there are more than 20 facilities, it should show as a search:</p>\n<p><img src=\"sop-images/image10.png\" alt=\"Current Facility search in NJIIS\" width=\"624\" height=\"122\"></p>\n<p>If you do get this, please let me know and I can give you the facilities in your user account so you can check that way.</p>\n<p>Thank you,</p>",
-      "created_at": "2026-11-17T20:42:23Z",
+      "created_at": "2026-11-18T14:44:44Z",
       "default_body_html": "<p>Hello {{contact_first_name}},</p>\n<p>On the dropdown, make sure to change to a school. You can see the list on the drop down.</p>\n<p>If there are more than 20 facilities, it should show as a search:</p>\n<p><img src=\"sop-images/image10.png\" alt=\"Current Facility search in NJIIS\" width=\"624\" height=\"122\"></p>\n<p>If you do get this, please let me know and I can give you the facilities in your user account so you can check that way.</p>\n<p>Thank you,</p>",
       "default_subject": "RE: {{original_subject}}",
       "description": "Use the Current Facility dropdown or search (20+ facilities).",
@@ -5457,7 +5732,7 @@
       "is_customized": false,
       "is_system": true,
       "issue_type": "lhd_access_denied",
-      "last_modified": "2026-11-17T20:42:23Z",
+      "last_modified": "2026-11-18T14:44:44Z",
       "name": "Select school in dropdown/search",
       "optional_fields": [
         "contact_first_name"
@@ -5481,7 +5756,7 @@
     {
       "asserts": [],
       "body_html": "<p>Hello {{contact_first_name}},</p>\n<p>I'm sorry that clearing your cache did not resolve the problem. Please do the following:</p>\n<ol>\n<li>Enter the webinar link <a href=\"https://register.gotowebinar.com/register/1147500267204169557\" rel=\"noopener noreferrer\">https://register.gotowebinar.com/register/1147500267204169557</a> into a different browser.</li>\n<li>If you run into the same problem in a different browser, we recommend contacting your IT person and asking them to whitelist this domain name: gotowebinar.com . They should also access <a href=\"https://support.goto.com/webinar/help/allowlisting-and-firewall-configuration\" rel=\"noopener noreferrer\">this link</a> for more details about whitelisting.</li>\n</ol>\n<p>Please let me know if you have any questions.</p>\n<p>Thank you,</p>",
-      "created_at": "2026-11-17T20:42:23Z",
+      "created_at": "2026-11-18T14:44:44Z",
       "default_body_html": "<p>Hello {{contact_first_name}},</p>\n<p>I'm sorry that clearing your cache did not resolve the problem. Please do the following:</p>\n<ol>\n<li>Enter the webinar link <a href=\"https://register.gotowebinar.com/register/1147500267204169557\" rel=\"noopener noreferrer\">https://register.gotowebinar.com/register/1147500267204169557</a> into a different browser.</li>\n<li>If you run into the same problem in a different browser, we recommend contacting your IT person and asking them to whitelist this domain name: gotowebinar.com . They should also access <a href=\"https://support.goto.com/webinar/help/allowlisting-and-firewall-configuration\" rel=\"noopener noreferrer\">this link</a> for more details about whitelisting.</li>\n</ol>\n<p>Please let me know if you have any questions.</p>\n<p>Thank you,</p>",
       "default_subject": "RE: {{original_subject}}",
       "description": "Cache clearing did not help; try another browser and contact IT.",
@@ -5490,7 +5765,7 @@
       "is_customized": false,
       "is_system": true,
       "issue_type": "webinar_issue",
-      "last_modified": "2026-11-17T20:42:23Z",
+      "last_modified": "2026-11-18T14:44:44Z",
       "name": "Different browser / IT allowlisting",
       "optional_fields": [
         "contact_first_name"
@@ -5520,7 +5795,7 @@
     {
       "asserts": [],
       "body_html": "<p>Hello {{contact_first_name}},</p>\n<p>I'm sorry that you're having problems. We have received some reports from others about this issue. To troubleshoot this issue, please do the following:</p>\n<ol>\n<li>Clear your cache\n<ul>\n<li>To clear your cache in the Google Chrome browser, click the 3 vertical dots in the upper right, and select “Delete browsing data.” Then check “Cached images and files” and click “Delete data.”</li>\n<li>Close the browser, re-open, and attempt to access again.</li>\n</ul>\n<p><img src=\"sop-images/image8.png\" alt=\"Chrome menu showing Delete browsing data\" width=\"186\" height=\"276\"></p>\n<ul>\n<li>Click <a href=\"https://njiis.nj.gov/core/web/index.html#/home/training\" rel=\"noopener noreferrer\">here</a> to access the training page and scroll down to Annual Immunization Status Report (ASR) Training.</li>\n</ul>\n</li>\n</ol>\n<p>If that doesn't work please do the following:</p>\n<ol start=\"2\">\n<li>Enter the webinar link <a href=\"https://register.gotowebinar.com/register/1147500267204169557\" rel=\"noopener noreferrer\">https://register.gotowebinar.com/register/1147500267204169557</a> into a different browser.</li>\n<li>If you run into the same problem in a different browser, we recommend contacting your IT person and asking them to whitelist this domain name: gotowebinar.com . They should also access <a href=\"https://support.goto.com/webinar/help/allowlisting-and-firewall-configuration\" rel=\"noopener noreferrer\">this link</a> for more details about whitelisting.</li>\n</ol>\n<p>Thank you,</p>",
-      "created_at": "2026-11-17T20:42:23Z",
+      "created_at": "2026-11-18T14:44:44Z",
       "default_body_html": "<p>Hello {{contact_first_name}},</p>\n<p>I'm sorry that you're having problems. We have received some reports from others about this issue. To troubleshoot this issue, please do the following:</p>\n<ol>\n<li>Clear your cache\n<ul>\n<li>To clear your cache in the Google Chrome browser, click the 3 vertical dots in the upper right, and select “Delete browsing data.” Then check “Cached images and files” and click “Delete data.”</li>\n<li>Close the browser, re-open, and attempt to access again.</li>\n</ul>\n<p><img src=\"sop-images/image8.png\" alt=\"Chrome menu showing Delete browsing data\" width=\"186\" height=\"276\"></p>\n<ul>\n<li>Click <a href=\"https://njiis.nj.gov/core/web/index.html#/home/training\" rel=\"noopener noreferrer\">here</a> to access the training page and scroll down to Annual Immunization Status Report (ASR) Training.</li>\n</ul>\n</li>\n</ol>\n<p>If that doesn't work please do the following:</p>\n<ol start=\"2\">\n<li>Enter the webinar link <a href=\"https://register.gotowebinar.com/register/1147500267204169557\" rel=\"noopener noreferrer\">https://register.gotowebinar.com/register/1147500267204169557</a> into a different browser.</li>\n<li>If you run into the same problem in a different browser, we recommend contacting your IT person and asking them to whitelist this domain name: gotowebinar.com . They should also access <a href=\"https://support.goto.com/webinar/help/allowlisting-and-firewall-configuration\" rel=\"noopener noreferrer\">this link</a> for more details about whitelisting.</li>\n</ol>\n<p>Thank you,</p>",
       "default_subject": "RE: {{original_subject}}",
       "description": "Full SOP reply: clear cache, different browser, IT allowlisting.",
@@ -5529,7 +5804,7 @@
       "is_customized": false,
       "is_system": true,
       "issue_type": "webinar_issue",
-      "last_modified": "2026-11-17T20:42:23Z",
+      "last_modified": "2026-11-18T14:44:44Z",
       "name": "Clear cache troubleshooting",
       "optional_fields": [
         "contact_first_name"
@@ -5548,7 +5823,7 @@
     {
       "asserts": [],
       "body_html": "<p>Hello {{contact_first_name}},</p>\n<p>While in your ASR form on NJIIS, do the following:</p>\n<ol type=\"a\">\n<li>Select Yes to the question “Does the school have applicable grades or transfer students?”</li>\n<li>Select the applicable grades by answering the question: “What grade levels are housed in your facility?”</li>\n<li>Open up the ASR form for each grade selected so that you see the tables w/ blank boxes for each grade.</li>\n<li>Click the left arrow at the top of the menu on the left to hide that menu.<br><img src=\"sop-images/image4.png\" alt=\"Hide the left menu\" width=\"624\" height=\"226\"></li>\n<li>Move your cursor to the middle of the screen, right click your mouse so that the menu shown below appears on your screen (or something similar if you're not using Google Chrome)<br><img src=\"sop-images/image5.png\" alt=\"Right-click menu\" width=\"341\" height=\"340\"></li>\n<li>Click “Print”<br><img src=\"sop-images/image6.png\" alt=\"Print option\" width=\"425\" height=\"423\"></li>\n<li>After selecting “Print” a window will pop up.\n<ol type=\"i\">\n<li>In “Destination” select “Save as PDF”</li>\n<li>Then click “Save”</li>\n</ol>\n<img src=\"sop-images/image7.png\" alt=\"Save as PDF in the print dialog\" width=\"624\" height=\"399\"></li>\n</ol>\n<p>Does this give you what you need? Thanks.</p>",
-      "created_at": "2026-11-17T20:42:23Z",
+      "created_at": "2026-11-18T14:44:44Z",
       "default_body_html": "<p>Hello {{contact_first_name}},</p>\n<p>While in your ASR form on NJIIS, do the following:</p>\n<ol type=\"a\">\n<li>Select Yes to the question “Does the school have applicable grades or transfer students?”</li>\n<li>Select the applicable grades by answering the question: “What grade levels are housed in your facility?”</li>\n<li>Open up the ASR form for each grade selected so that you see the tables w/ blank boxes for each grade.</li>\n<li>Click the left arrow at the top of the menu on the left to hide that menu.<br><img src=\"sop-images/image4.png\" alt=\"Hide the left menu\" width=\"624\" height=\"226\"></li>\n<li>Move your cursor to the middle of the screen, right click your mouse so that the menu shown below appears on your screen (or something similar if you're not using Google Chrome)<br><img src=\"sop-images/image5.png\" alt=\"Right-click menu\" width=\"341\" height=\"340\"></li>\n<li>Click “Print”<br><img src=\"sop-images/image6.png\" alt=\"Print option\" width=\"425\" height=\"423\"></li>\n<li>After selecting “Print” a window will pop up.\n<ol type=\"i\">\n<li>In “Destination” select “Save as PDF”</li>\n<li>Then click “Save”</li>\n</ol>\n<img src=\"sop-images/image7.png\" alt=\"Save as PDF in the print dialog\" width=\"624\" height=\"399\"></li>\n</ol>\n<p>Does this give you what you need? Thanks.</p>",
       "default_subject": "RE: {{original_subject}}",
       "description": "Step-by-step print-to-PDF instructions with screenshots.",
@@ -5557,7 +5832,7 @@
       "is_customized": false,
       "is_system": true,
       "issue_type": "save_form_pdf",
-      "last_modified": "2026-11-17T20:42:23Z",
+      "last_modified": "2026-11-18T14:44:44Z",
       "name": "Save form as PDF",
       "optional_fields": [
         "contact_first_name"
@@ -5576,7 +5851,7 @@
     {
       "asserts": [],
       "body_html": "<p>Hello {{contact_first_name}},</p>\n<p>The reporting process has changed. The Annual Immunization Status Report (ASR) is now only available on the New Jersey Immunization Information System (NJIIS). To get access to the form, a school must enroll in NJIIS, all people who wish to view or edit the ASR should be included on the enrollment form, and those individuals must also complete the on-demand ASR training. Please see the process below to access the enrollment form and training.</p>\n<p>Here is the process:</p>\n<ol>\n<li>Enroll school in NJIIS using this link <a href=\"https://njiis.nj.gov/core/web/index.html#/home/newEnrollment\" rel=\"noopener noreferrer\">https://njiis.nj.gov/core/web/index.html#/home/newEnrollment</a></li>\n<li>On the enrollment form, please include as either contacts or users anyone who you want to have access to either view or edit the Annual Immunization Status Report (ASR)</li>\n<li>All people who want to view/edit the ASR must complete the on-demand ASR training, which is available here: <a href=\"https://register.gotowebinar.com/register/1147500267204169557\" rel=\"noopener noreferrer\">https://register.gotowebinar.com/register/1147500267204169557</a></li>\n<li>Please submit the ASR by the deadline: {{asr_deadline}}</li>\n</ol>\n<p>Thank you,</p>",
-      "created_at": "2026-11-17T20:42:23Z",
+      "created_at": "2026-11-18T14:44:44Z",
       "default_body_html": "<p>Hello {{contact_first_name}},</p>\n<p>The reporting process has changed. The Annual Immunization Status Report (ASR) is now only available on the New Jersey Immunization Information System (NJIIS). To get access to the form, a school must enroll in NJIIS, all people who wish to view or edit the ASR should be included on the enrollment form, and those individuals must also complete the on-demand ASR training. Please see the process below to access the enrollment form and training.</p>\n<p>Here is the process:</p>\n<ol>\n<li>Enroll school in NJIIS using this link <a href=\"https://njiis.nj.gov/core/web/index.html#/home/newEnrollment\" rel=\"noopener noreferrer\">https://njiis.nj.gov/core/web/index.html#/home/newEnrollment</a></li>\n<li>On the enrollment form, please include as either contacts or users anyone who you want to have access to either view or edit the Annual Immunization Status Report (ASR)</li>\n<li>All people who want to view/edit the ASR must complete the on-demand ASR training, which is available here: <a href=\"https://register.gotowebinar.com/register/1147500267204169557\" rel=\"noopener noreferrer\">https://register.gotowebinar.com/register/1147500267204169557</a></li>\n<li>Please submit the ASR by the deadline: {{asr_deadline}}</li>\n</ol>\n<p>Thank you,</p>",
       "default_subject": "RE: {{original_subject}}",
       "description": "Full summary of the enrollment and training process with the deadline.",
@@ -5585,7 +5860,7 @@
       "is_customized": false,
       "is_system": true,
       "issue_type": "general_asr_process",
-      "last_modified": "2026-11-17T20:42:23Z",
+      "last_modified": "2026-11-18T14:44:44Z",
       "name": "Enrollment & ASR training process",
       "optional_fields": [
         "contact_first_name"
@@ -5618,7 +5893,7 @@
         }
       ],
       "body_html": "<p>Hello {{contact_first_name}},</p>\n<p>I can confirm that we received the data for the following grades:</p>\n<p>{{submitted_grades}}</p>\n<p>If you entered data for other grades, that you don't see in the list above, it is likely because the Submit button wasn't clicked for the grade(s).</p>\n<p><strong>Note that Each Grade has a Separate Form and Needs to be Submitted Individually</strong></p>\n<ul>\n<li>Clicking Submit on one grade’s form only submits the information for that specific grade. It will not submit the information for another grade’s form.</li>\n<li>For example:\n<ul>\n<li>If you have Childcare/Preschool and Kindergarten in your school…\n<ul>\n<li>You need to click “Submit” at the bottom of the Pre-K/Child Care form after completing it.</li>\n<li>You ALSO need to click “Submit” at the bottom of the Kindergarten form to submit that one.</li>\n<li>If you click “Submit” on Pre-K/Child Care but do not click “Submit” on Kindergarten, only Pre-K/Child Care will be submitted</li>\n</ul>\n</li>\n</ul>\n</li>\n</ul>\n<p><img src=\"sop-images/image16.png\" alt=\"Submit button\" width=\"186\" height=\"90\"></p>\n<ul>\n<li>When you click the “Submit” button and see a popup saying that you have successfully updated your form, that means your form has been submitted <em>for that specific grade</em>.</li>\n</ul>\n<p><img src=\"sop-images/image17.png\" alt=\"Successfully updated popup\" width=\"378\" height=\"130\"></p>\n<p>Thank you,</p>",
-      "created_at": "2026-11-17T20:42:23Z",
+      "created_at": "2026-11-18T14:44:44Z",
       "default_body_html": "<p>Hello {{contact_first_name}},</p>\n<p>I can confirm that we received the data for the following grades:</p>\n<p>{{submitted_grades}}</p>\n<p>If you entered data for other grades, that you don't see in the list above, it is likely because the Submit button wasn't clicked for the grade(s).</p>\n<p><strong>Note that Each Grade has a Separate Form and Needs to be Submitted Individually</strong></p>\n<ul>\n<li>Clicking Submit on one grade’s form only submits the information for that specific grade. It will not submit the information for another grade’s form.</li>\n<li>For example:\n<ul>\n<li>If you have Childcare/Preschool and Kindergarten in your school…\n<ul>\n<li>You need to click “Submit” at the bottom of the Pre-K/Child Care form after completing it.</li>\n<li>You ALSO need to click “Submit” at the bottom of the Kindergarten form to submit that one.</li>\n<li>If you click “Submit” on Pre-K/Child Care but do not click “Submit” on Kindergarten, only Pre-K/Child Care will be submitted</li>\n</ul>\n</li>\n</ul>\n</li>\n</ul>\n<p><img src=\"sop-images/image16.png\" alt=\"Submit button\" width=\"186\" height=\"90\"></p>\n<ul>\n<li>When you click the “Submit” button and see a popup saying that you have successfully updated your form, that means your form has been submitted <em>for that specific grade</em>.</li>\n</ul>\n<p><img src=\"sop-images/image17.png\" alt=\"Successfully updated popup\" width=\"378\" height=\"130\"></p>\n<p>Thank you,</p>",
       "default_subject": "RE: {{original_subject}}",
       "description": "Data found; list the verified grades.",
@@ -5627,7 +5902,7 @@
       "is_customized": false,
       "is_system": true,
       "issue_type": "submission_confirm_receipt",
-      "last_modified": "2026-11-17T20:42:23Z",
+      "last_modified": "2026-11-18T14:44:44Z",
       "name": "Submission confirmed",
       "optional_fields": [
         "contact_first_name"
@@ -5662,7 +5937,7 @@
         }
       ],
       "body_html": "<p>Hello {{contact_first_name}},</p>\n<p>It appears that the data have not been successfully submitted.</p>\n<p><strong>Note that Each Grade has a Separate Form and Needs to be Submitted Individually</strong></p>\n<ul>\n<li>Clicking Submit on one grade’s form only submits the information for that specific grade. It will not submit the information for another grade’s form.</li>\n<li>For example:\n<ul>\n<li>If you have Childcare/Preschool and Kindergarten in your school…\n<ul>\n<li>You need to click “Submit” at the bottom of the Pre-K/Child Care form after completing it.</li>\n<li>You ALSO need to click “Submit” at the bottom of the Kindergarten form to submit that one.</li>\n<li>If you click “Submit” on Pre-K/Child Care but do not click “Submit” on Kindergarten, only Pre-K/Child Care will be submitted</li>\n</ul>\n</li>\n</ul>\n</li>\n</ul>\n<p><img src=\"sop-images/image16.png\" alt=\"Submit button\" width=\"186\" height=\"90\"></p>\n<ul>\n<li>When you click the “Submit” button and see a popup saying that you have successfully updated your form, that means your form has been submitted <em>for that specific grade</em>.</li>\n</ul>\n<p><img src=\"sop-images/image17.png\" alt=\"Successfully updated popup\" width=\"378\" height=\"130\"></p>\n<p>Thank you,</p>",
-      "created_at": "2026-11-17T20:42:23Z",
+      "created_at": "2026-11-18T14:44:44Z",
       "default_body_html": "<p>Hello {{contact_first_name}},</p>\n<p>It appears that the data have not been successfully submitted.</p>\n<p><strong>Note that Each Grade has a Separate Form and Needs to be Submitted Individually</strong></p>\n<ul>\n<li>Clicking Submit on one grade’s form only submits the information for that specific grade. It will not submit the information for another grade’s form.</li>\n<li>For example:\n<ul>\n<li>If you have Childcare/Preschool and Kindergarten in your school…\n<ul>\n<li>You need to click “Submit” at the bottom of the Pre-K/Child Care form after completing it.</li>\n<li>You ALSO need to click “Submit” at the bottom of the Kindergarten form to submit that one.</li>\n<li>If you click “Submit” on Pre-K/Child Care but do not click “Submit” on Kindergarten, only Pre-K/Child Care will be submitted</li>\n</ul>\n</li>\n</ul>\n</li>\n</ul>\n<p><img src=\"sop-images/image16.png\" alt=\"Submit button\" width=\"186\" height=\"90\"></p>\n<ul>\n<li>When you click the “Submit” button and see a popup saying that you have successfully updated your form, that means your form has been submitted <em>for that specific grade</em>.</li>\n</ul>\n<p><img src=\"sop-images/image17.png\" alt=\"Successfully updated popup\" width=\"378\" height=\"130\"></p>\n<p>Thank you,</p>",
       "default_subject": "RE: {{original_subject}}",
       "description": "Data not found; explain per-grade submission.",
@@ -5671,7 +5946,7 @@
       "is_customized": false,
       "is_system": true,
       "issue_type": "submission_confirm_receipt",
-      "last_modified": "2026-11-17T20:42:23Z",
+      "last_modified": "2026-11-18T14:44:44Z",
       "name": "Submission not found",
       "optional_fields": [
         "contact_first_name"
@@ -5698,7 +5973,7 @@
     {
       "asserts": [],
       "body_html": "<p>Hello {{contact_first_name}},</p>\n<p>Thank you for your email. I am checking NJIIS to confirm whether the {{form_type}} data for {{school_name}} (School NJIIS ID: {{school_njiis_id}}) were received. I will follow up with you once I have reviewed the submission.</p>\n<p>Please let me know if you have any questions.</p>\n<p>Thank you,</p>",
-      "created_at": "2026-11-17T20:42:23Z",
+      "created_at": "2026-11-18T14:44:44Z",
       "default_body_html": "<p>Hello {{contact_first_name}},</p>\n<p>Thank you for your email. I am checking NJIIS to confirm whether the {{form_type}} data for {{school_name}} (School NJIIS ID: {{school_njiis_id}}) were received. I will follow up with you once I have reviewed the submission.</p>\n<p>Please let me know if you have any questions.</p>\n<p>Thank you,</p>",
       "default_subject": "RE: {{original_subject}}",
       "description": "Acknowledge the request while staff check NJIIS. Makes no claim about receipt.",
@@ -5707,7 +5982,7 @@
       "is_customized": false,
       "is_system": true,
       "issue_type": "submission_confirm_receipt",
-      "last_modified": "2026-11-17T20:42:23Z",
+      "last_modified": "2026-11-18T14:44:44Z",
       "name": "Verification pending",
       "optional_fields": [
         "school_name",
@@ -5735,7 +6010,7 @@
         }
       ],
       "body_html": "<p>Hello {{contact_first_name}},</p>\n<p>It appears that the data have not been successfully submitted.</p>\n<p><strong>Note that Each Grade has a Separate Form and Needs to be Submitted Individually</strong></p>\n<ul>\n<li>Clicking Submit on one grade’s form only submits the information for that specific grade. It will not submit the information for another grade’s form.</li>\n<li>For example:\n<ul>\n<li>If you have Childcare/Preschool and Kindergarten in your school…\n<ul>\n<li>You need to click “Submit” at the bottom of the Pre-K/Child Care form after completing it.</li>\n<li>You ALSO need to click “Submit” at the bottom of the Kindergarten form to submit that one.</li>\n<li>If you click “Submit” on Pre-K/Child Care but do not click “Submit” on Kindergarten, only Pre-K/Child Care will be submitted</li>\n</ul>\n</li>\n</ul>\n</li>\n</ul>\n<p><img src=\"sop-images/image16.png\" alt=\"Submit button\" width=\"186\" height=\"90\"></p>\n<ul>\n<li>When you click the “Submit” button and see a popup saying that you have successfully updated your form, that means your form has been submitted <em>for that specific grade</em>.</li>\n</ul>\n<p><img src=\"sop-images/image17.png\" alt=\"Successfully updated popup\" width=\"378\" height=\"130\"></p>\n<p>Thank you,</p>",
-      "created_at": "2026-11-17T20:42:23Z",
+      "created_at": "2026-11-18T14:44:44Z",
       "default_body_html": "<p>Hello {{contact_first_name}},</p>\n<p>It appears that the data have not been successfully submitted.</p>\n<p><strong>Note that Each Grade has a Separate Form and Needs to be Submitted Individually</strong></p>\n<ul>\n<li>Clicking Submit on one grade’s form only submits the information for that specific grade. It will not submit the information for another grade’s form.</li>\n<li>For example:\n<ul>\n<li>If you have Childcare/Preschool and Kindergarten in your school…\n<ul>\n<li>You need to click “Submit” at the bottom of the Pre-K/Child Care form after completing it.</li>\n<li>You ALSO need to click “Submit” at the bottom of the Kindergarten form to submit that one.</li>\n<li>If you click “Submit” on Pre-K/Child Care but do not click “Submit” on Kindergarten, only Pre-K/Child Care will be submitted</li>\n</ul>\n</li>\n</ul>\n</li>\n</ul>\n<p><img src=\"sop-images/image16.png\" alt=\"Submit button\" width=\"186\" height=\"90\"></p>\n<ul>\n<li>When you click the “Submit” button and see a popup saying that you have successfully updated your form, that means your form has been submitted <em>for that specific grade</em>.</li>\n</ul>\n<p><img src=\"sop-images/image17.png\" alt=\"Successfully updated popup\" width=\"378\" height=\"130\"></p>\n<p>Thank you,</p>",
       "default_subject": "RE: {{original_subject}}",
       "description": "Data not found; explain per-grade submission.",
@@ -5744,7 +6019,7 @@
       "is_customized": false,
       "is_system": true,
       "issue_type": "submission_not_submitted",
-      "last_modified": "2026-11-17T20:42:23Z",
+      "last_modified": "2026-11-18T14:44:44Z",
       "name": "Submission not found",
       "optional_fields": [
         "contact_first_name"
@@ -5783,7 +6058,7 @@
         }
       ],
       "body_html": "<p>Hello {{contact_first_name}},</p>\n<p>I can confirm that we received the data for the following grades:</p>\n<p>{{submitted_grades}}</p>\n<p>If you entered data for other grades, that you don't see in the list above, it is likely because the Submit button wasn't clicked for the grade(s).</p>\n<p><strong>Note that Each Grade has a Separate Form and Needs to be Submitted Individually</strong></p>\n<ul>\n<li>Clicking Submit on one grade’s form only submits the information for that specific grade. It will not submit the information for another grade’s form.</li>\n<li>For example:\n<ul>\n<li>If you have Childcare/Preschool and Kindergarten in your school…\n<ul>\n<li>You need to click “Submit” at the bottom of the Pre-K/Child Care form after completing it.</li>\n<li>You ALSO need to click “Submit” at the bottom of the Kindergarten form to submit that one.</li>\n<li>If you click “Submit” on Pre-K/Child Care but do not click “Submit” on Kindergarten, only Pre-K/Child Care will be submitted</li>\n</ul>\n</li>\n</ul>\n</li>\n</ul>\n<p><img src=\"sop-images/image16.png\" alt=\"Submit button\" width=\"186\" height=\"90\"></p>\n<ul>\n<li>When you click the “Submit” button and see a popup saying that you have successfully updated your form, that means your form has been submitted <em>for that specific grade</em>.</li>\n</ul>\n<p><img src=\"sop-images/image17.png\" alt=\"Successfully updated popup\" width=\"378\" height=\"130\"></p>\n<p>Thank you,</p>",
-      "created_at": "2026-11-17T20:42:23Z",
+      "created_at": "2026-11-18T14:44:44Z",
       "default_body_html": "<p>Hello {{contact_first_name}},</p>\n<p>I can confirm that we received the data for the following grades:</p>\n<p>{{submitted_grades}}</p>\n<p>If you entered data for other grades, that you don't see in the list above, it is likely because the Submit button wasn't clicked for the grade(s).</p>\n<p><strong>Note that Each Grade has a Separate Form and Needs to be Submitted Individually</strong></p>\n<ul>\n<li>Clicking Submit on one grade’s form only submits the information for that specific grade. It will not submit the information for another grade’s form.</li>\n<li>For example:\n<ul>\n<li>If you have Childcare/Preschool and Kindergarten in your school…\n<ul>\n<li>You need to click “Submit” at the bottom of the Pre-K/Child Care form after completing it.</li>\n<li>You ALSO need to click “Submit” at the bottom of the Kindergarten form to submit that one.</li>\n<li>If you click “Submit” on Pre-K/Child Care but do not click “Submit” on Kindergarten, only Pre-K/Child Care will be submitted</li>\n</ul>\n</li>\n</ul>\n</li>\n</ul>\n<p><img src=\"sop-images/image16.png\" alt=\"Submit button\" width=\"186\" height=\"90\"></p>\n<ul>\n<li>When you click the “Submit” button and see a popup saying that you have successfully updated your form, that means your form has been submitted <em>for that specific grade</em>.</li>\n</ul>\n<p><img src=\"sop-images/image17.png\" alt=\"Successfully updated popup\" width=\"378\" height=\"130\"></p>\n<p>Thank you,</p>",
       "default_subject": "RE: {{original_subject}}",
       "description": "Check found the data after all; list verified grades.",
@@ -5792,7 +6067,7 @@
       "is_customized": false,
       "is_system": true,
       "issue_type": "submission_not_submitted",
-      "last_modified": "2026-11-17T20:42:23Z",
+      "last_modified": "2026-11-18T14:44:44Z",
       "name": "Submission confirmed",
       "optional_fields": [
         "contact_first_name"
@@ -5819,7 +6094,7 @@
     {
       "asserts": [],
       "body_html": "<p>Hello {{contact_first_name}},</p>\n<p>Thank you for your email. I am checking NJIIS to confirm whether the {{form_type}} data for {{school_name}} (School NJIIS ID: {{school_njiis_id}}) were received. I will follow up with you once I have reviewed the submission.</p>\n<p>Please let me know if you have any questions.</p>\n<p>Thank you,</p>",
-      "created_at": "2026-11-17T20:42:23Z",
+      "created_at": "2026-11-18T14:44:44Z",
       "default_body_html": "<p>Hello {{contact_first_name}},</p>\n<p>Thank you for your email. I am checking NJIIS to confirm whether the {{form_type}} data for {{school_name}} (School NJIIS ID: {{school_njiis_id}}) were received. I will follow up with you once I have reviewed the submission.</p>\n<p>Please let me know if you have any questions.</p>\n<p>Thank you,</p>",
       "default_subject": "RE: {{original_subject}}",
       "description": "Acknowledge while staff check NJIIS.",
@@ -5828,7 +6103,7 @@
       "is_customized": false,
       "is_system": true,
       "issue_type": "submission_not_submitted",
-      "last_modified": "2026-11-17T20:42:23Z",
+      "last_modified": "2026-11-18T14:44:44Z",
       "name": "Verification pending",
       "optional_fields": [
         "school_name",
@@ -5866,7 +6141,7 @@
         }
       ],
       "body_html": "<p>Hello {{contact_first_name}},</p>\n<p>I can confirm that we received the data for the following grades:</p>\n<p>{{submitted_grades}}</p>\n<p>We did not find submitted data for the following grade(s): {{missing_grades}}. If you entered data for these grades, it is likely because the Submit button wasn't clicked for the grade(s).</p>\n<p><strong>Note that Each Grade has a Separate Form and Needs to be Submitted Individually</strong></p>\n<ul>\n<li>Clicking Submit on one grade’s form only submits the information for that specific grade. It will not submit the information for another grade’s form.</li>\n<li>For example:\n<ul>\n<li>If you have Childcare/Preschool and Kindergarten in your school…\n<ul>\n<li>You need to click “Submit” at the bottom of the Pre-K/Child Care form after completing it.</li>\n<li>You ALSO need to click “Submit” at the bottom of the Kindergarten form to submit that one.</li>\n<li>If you click “Submit” on Pre-K/Child Care but do not click “Submit” on Kindergarten, only Pre-K/Child Care will be submitted</li>\n</ul>\n</li>\n</ul>\n</li>\n</ul>\n<p><img src=\"sop-images/image16.png\" alt=\"Submit button\" width=\"186\" height=\"90\"></p>\n<ul>\n<li>When you click the “Submit” button and see a popup saying that you have successfully updated your form, that means your form has been submitted <em>for that specific grade</em>.</li>\n</ul>\n<p><img src=\"sop-images/image17.png\" alt=\"Successfully updated popup\" width=\"378\" height=\"130\"></p>\n<p>Thank you,</p>",
-      "created_at": "2026-11-17T20:42:23Z",
+      "created_at": "2026-11-18T14:44:44Z",
       "default_body_html": "<p>Hello {{contact_first_name}},</p>\n<p>I can confirm that we received the data for the following grades:</p>\n<p>{{submitted_grades}}</p>\n<p>We did not find submitted data for the following grade(s): {{missing_grades}}. If you entered data for these grades, it is likely because the Submit button wasn't clicked for the grade(s).</p>\n<p><strong>Note that Each Grade has a Separate Form and Needs to be Submitted Individually</strong></p>\n<ul>\n<li>Clicking Submit on one grade’s form only submits the information for that specific grade. It will not submit the information for another grade’s form.</li>\n<li>For example:\n<ul>\n<li>If you have Childcare/Preschool and Kindergarten in your school…\n<ul>\n<li>You need to click “Submit” at the bottom of the Pre-K/Child Care form after completing it.</li>\n<li>You ALSO need to click “Submit” at the bottom of the Kindergarten form to submit that one.</li>\n<li>If you click “Submit” on Pre-K/Child Care but do not click “Submit” on Kindergarten, only Pre-K/Child Care will be submitted</li>\n</ul>\n</li>\n</ul>\n</li>\n</ul>\n<p><img src=\"sop-images/image16.png\" alt=\"Submit button\" width=\"186\" height=\"90\"></p>\n<ul>\n<li>When you click the “Submit” button and see a popup saying that you have successfully updated your form, that means your form has been submitted <em>for that specific grade</em>.</li>\n</ul>\n<p><img src=\"sop-images/image17.png\" alt=\"Successfully updated popup\" width=\"378\" height=\"130\"></p>\n<p>Thank you,</p>",
       "default_subject": "RE: {{original_subject}}",
       "description": "SOP confirmation wording plus the verified list of grades not found.",
@@ -5875,7 +6150,7 @@
       "is_customized": false,
       "is_system": true,
       "issue_type": "grade_submission_problem",
-      "last_modified": "2026-11-17T20:42:23Z",
+      "last_modified": "2026-11-18T14:44:44Z",
       "name": "Some grades submitted",
       "optional_fields": [
         "contact_first_name"
@@ -5919,7 +6194,7 @@
         }
       ],
       "body_html": "<p>Hello {{contact_first_name}},</p>\n<p>I can confirm that we received the data for the following grades:</p>\n<p>{{submitted_grades}}</p>\n<p>If you entered data for other grades, that you don't see in the list above, it is likely because the Submit button wasn't clicked for the grade(s).</p>\n<p><strong>Note that Each Grade has a Separate Form and Needs to be Submitted Individually</strong></p>\n<ul>\n<li>Clicking Submit on one grade’s form only submits the information for that specific grade. It will not submit the information for another grade’s form.</li>\n<li>For example:\n<ul>\n<li>If you have Childcare/Preschool and Kindergarten in your school…\n<ul>\n<li>You need to click “Submit” at the bottom of the Pre-K/Child Care form after completing it.</li>\n<li>You ALSO need to click “Submit” at the bottom of the Kindergarten form to submit that one.</li>\n<li>If you click “Submit” on Pre-K/Child Care but do not click “Submit” on Kindergarten, only Pre-K/Child Care will be submitted</li>\n</ul>\n</li>\n</ul>\n</li>\n</ul>\n<p><img src=\"sop-images/image16.png\" alt=\"Submit button\" width=\"186\" height=\"90\"></p>\n<ul>\n<li>When you click the “Submit” button and see a popup saying that you have successfully updated your form, that means your form has been submitted <em>for that specific grade</em>.</li>\n</ul>\n<p><img src=\"sop-images/image17.png\" alt=\"Successfully updated popup\" width=\"378\" height=\"130\"></p>\n<p>Thank you,</p>",
-      "created_at": "2026-11-17T20:42:23Z",
+      "created_at": "2026-11-18T14:44:44Z",
       "default_body_html": "<p>Hello {{contact_first_name}},</p>\n<p>I can confirm that we received the data for the following grades:</p>\n<p>{{submitted_grades}}</p>\n<p>If you entered data for other grades, that you don't see in the list above, it is likely because the Submit button wasn't clicked for the grade(s).</p>\n<p><strong>Note that Each Grade has a Separate Form and Needs to be Submitted Individually</strong></p>\n<ul>\n<li>Clicking Submit on one grade’s form only submits the information for that specific grade. It will not submit the information for another grade’s form.</li>\n<li>For example:\n<ul>\n<li>If you have Childcare/Preschool and Kindergarten in your school…\n<ul>\n<li>You need to click “Submit” at the bottom of the Pre-K/Child Care form after completing it.</li>\n<li>You ALSO need to click “Submit” at the bottom of the Kindergarten form to submit that one.</li>\n<li>If you click “Submit” on Pre-K/Child Care but do not click “Submit” on Kindergarten, only Pre-K/Child Care will be submitted</li>\n</ul>\n</li>\n</ul>\n</li>\n</ul>\n<p><img src=\"sop-images/image16.png\" alt=\"Submit button\" width=\"186\" height=\"90\"></p>\n<ul>\n<li>When you click the “Submit” button and see a popup saying that you have successfully updated your form, that means your form has been submitted <em>for that specific grade</em>.</li>\n</ul>\n<p><img src=\"sop-images/image17.png\" alt=\"Successfully updated popup\" width=\"378\" height=\"130\"></p>\n<p>Thank you,</p>",
       "default_subject": "RE: {{original_subject}}",
       "description": "All found grades listed; SOP wording about other grades.",
@@ -5928,7 +6203,7 @@
       "is_customized": false,
       "is_system": true,
       "issue_type": "grade_submission_problem",
-      "last_modified": "2026-11-17T20:42:23Z",
+      "last_modified": "2026-11-18T14:44:44Z",
       "name": "Submission confirmed",
       "optional_fields": [
         "contact_first_name"
@@ -5962,7 +6237,7 @@
         }
       ],
       "body_html": "<p>Hello {{contact_first_name}},</p>\n<p>It appears that the data have not been successfully submitted.</p>\n<p><strong>Note that Each Grade has a Separate Form and Needs to be Submitted Individually</strong></p>\n<ul>\n<li>Clicking Submit on one grade’s form only submits the information for that specific grade. It will not submit the information for another grade’s form.</li>\n<li>For example:\n<ul>\n<li>If you have Childcare/Preschool and Kindergarten in your school…\n<ul>\n<li>You need to click “Submit” at the bottom of the Pre-K/Child Care form after completing it.</li>\n<li>You ALSO need to click “Submit” at the bottom of the Kindergarten form to submit that one.</li>\n<li>If you click “Submit” on Pre-K/Child Care but do not click “Submit” on Kindergarten, only Pre-K/Child Care will be submitted</li>\n</ul>\n</li>\n</ul>\n</li>\n</ul>\n<p><img src=\"sop-images/image16.png\" alt=\"Submit button\" width=\"186\" height=\"90\"></p>\n<ul>\n<li>When you click the “Submit” button and see a popup saying that you have successfully updated your form, that means your form has been submitted <em>for that specific grade</em>.</li>\n</ul>\n<p><img src=\"sop-images/image17.png\" alt=\"Successfully updated popup\" width=\"378\" height=\"130\"></p>\n<p>Thank you,</p>",
-      "created_at": "2026-11-17T20:42:23Z",
+      "created_at": "2026-11-18T14:44:44Z",
       "default_body_html": "<p>Hello {{contact_first_name}},</p>\n<p>It appears that the data have not been successfully submitted.</p>\n<p><strong>Note that Each Grade has a Separate Form and Needs to be Submitted Individually</strong></p>\n<ul>\n<li>Clicking Submit on one grade’s form only submits the information for that specific grade. It will not submit the information for another grade’s form.</li>\n<li>For example:\n<ul>\n<li>If you have Childcare/Preschool and Kindergarten in your school…\n<ul>\n<li>You need to click “Submit” at the bottom of the Pre-K/Child Care form after completing it.</li>\n<li>You ALSO need to click “Submit” at the bottom of the Kindergarten form to submit that one.</li>\n<li>If you click “Submit” on Pre-K/Child Care but do not click “Submit” on Kindergarten, only Pre-K/Child Care will be submitted</li>\n</ul>\n</li>\n</ul>\n</li>\n</ul>\n<p><img src=\"sop-images/image16.png\" alt=\"Submit button\" width=\"186\" height=\"90\"></p>\n<ul>\n<li>When you click the “Submit” button and see a popup saying that you have successfully updated your form, that means your form has been submitted <em>for that specific grade</em>.</li>\n</ul>\n<p><img src=\"sop-images/image17.png\" alt=\"Successfully updated popup\" width=\"378\" height=\"130\"></p>\n<p>Thank you,</p>",
       "default_subject": "RE: {{original_subject}}",
       "description": "No data found for any grade.",
@@ -5971,7 +6246,7 @@
       "is_customized": false,
       "is_system": true,
       "issue_type": "grade_submission_problem",
-      "last_modified": "2026-11-17T20:42:23Z",
+      "last_modified": "2026-11-18T14:44:44Z",
       "name": "Submission not found",
       "optional_fields": [
         "contact_first_name"
@@ -5998,7 +6273,7 @@
     {
       "asserts": [],
       "body_html": "<p>Hello {{contact_first_name}},</p>\n<p>Thank you for your email. I am checking NJIIS to confirm whether the {{form_type}} data for {{school_name}} (School NJIIS ID: {{school_njiis_id}}) were received. I will follow up with you once I have reviewed the submission.</p>\n<p>Please let me know if you have any questions.</p>\n<p>Thank you,</p>",
-      "created_at": "2026-11-17T20:42:23Z",
+      "created_at": "2026-11-18T14:44:44Z",
       "default_body_html": "<p>Hello {{contact_first_name}},</p>\n<p>Thank you for your email. I am checking NJIIS to confirm whether the {{form_type}} data for {{school_name}} (School NJIIS ID: {{school_njiis_id}}) were received. I will follow up with you once I have reviewed the submission.</p>\n<p>Please let me know if you have any questions.</p>\n<p>Thank you,</p>",
       "default_subject": "RE: {{original_subject}}",
       "description": "Acknowledge while staff check each grade in NJIIS.",
@@ -6007,7 +6282,7 @@
       "is_customized": false,
       "is_system": true,
       "issue_type": "grade_submission_problem",
-      "last_modified": "2026-11-17T20:42:23Z",
+      "last_modified": "2026-11-18T14:44:44Z",
       "name": "Verification pending",
       "optional_fields": [
         "school_name",
@@ -6028,7 +6303,7 @@
     {
       "asserts": [],
       "body_html": "<p>Hello {{contact_first_name}},</p>\n<p>We have created a user guide to help through the form. You can view it <a href=\"https://njiis.nj.gov/docs/schoolForms/ASRandAuditUserGuide.pdf\" rel=\"noopener noreferrer\">here</a>. If you have any questions and you are not able to find them in the user guide, please do not hesitate to email me.</p>\n<p>Please let me know if you have any questions.</p>\n<p>Thank you,</p>",
-      "created_at": "2026-11-17T20:42:23Z",
+      "created_at": "2026-11-18T14:44:44Z",
       "default_body_html": "<p>Hello {{contact_first_name}},</p>\n<p>We have created a user guide to help through the form. You can view it <a href=\"https://njiis.nj.gov/docs/schoolForms/ASRandAuditUserGuide.pdf\" rel=\"noopener noreferrer\">here</a>. If you have any questions and you are not able to find them in the user guide, please do not hesitate to email me.</p>\n<p>Please let me know if you have any questions.</p>\n<p>Thank you,</p>",
       "default_subject": "RE: {{original_subject}}",
       "description": "Link to the ASR and Audit User Guide.",
@@ -6037,7 +6312,7 @@
       "is_customized": false,
       "is_system": true,
       "issue_type": "user_guide",
-      "last_modified": "2026-11-17T20:42:23Z",
+      "last_modified": "2026-11-18T14:44:44Z",
       "name": "Link the user guide",
       "optional_fields": [
         "contact_first_name"
@@ -6056,7 +6331,7 @@
     {
       "asserts": [],
       "body_html": "<p>Hello {{contact_first_name}},</p>\n<p>Thank you for contacting us regarding {{school_name}} (School NJIIS ID: {{school_njiis_id}}).</p>\n<p>We have reviewed your question regarding {{issue_description}}.</p>\n<p>{{staff_response}}</p>\n<p>Please let me know if you have any questions.</p>\n<p>Thank you,</p>",
-      "created_at": "2026-11-17T20:42:23Z",
+      "created_at": "2026-11-18T14:44:44Z",
       "default_body_html": "<p>Hello {{contact_first_name}},</p>\n<p>Thank you for contacting us regarding {{school_name}} (School NJIIS ID: {{school_njiis_id}}).</p>\n<p>We have reviewed your question regarding {{issue_description}}.</p>\n<p>{{staff_response}}</p>\n<p>Please let me know if you have any questions.</p>\n<p>Thank you,</p>",
       "default_subject": "RE: {{original_subject}}",
       "description": "Generic starter; staff write the response. No SOP wording exists.",
@@ -6065,7 +6340,7 @@
       "is_customized": false,
       "is_system": true,
       "issue_type": "other",
-      "last_modified": "2026-11-17T20:42:23Z",
+      "last_modified": "2026-11-18T14:44:44Z",
       "name": "Manual review starter",
       "optional_fields": [
         "school_name",
@@ -6088,7 +6363,7 @@
     {
       "asserts": [],
       "body_html": "<p>Hello {{contact_first_name}},</p>\n<p>We have created a user guide to help through the form. You can view it <a href=\"https://njiis.nj.gov/docs/schoolForms/ASRandAuditUserGuide.pdf\" rel=\"noopener noreferrer\">here</a>. If you have any questions and you are not able to find them in the user guide, please do not hesitate to email me.</p>\n<p>Please let me know if you have any questions.</p>\n<p>Thank you,</p>",
-      "created_at": "2026-11-17T20:42:23Z",
+      "created_at": "2026-11-18T14:44:44Z",
       "default_body_html": "<p>Hello {{contact_first_name}},</p>\n<p>We have created a user guide to help through the form. You can view it <a href=\"https://njiis.nj.gov/docs/schoolForms/ASRandAuditUserGuide.pdf\" rel=\"noopener noreferrer\">here</a>. If you have any questions and you are not able to find them in the user guide, please do not hesitate to email me.</p>\n<p>Please let me know if you have any questions.</p>\n<p>Thank you,</p>",
       "default_subject": "RE: {{original_subject}}",
       "description": "Fallback: point the sender to the user guide.",
@@ -6097,7 +6372,7 @@
       "is_customized": false,
       "is_system": true,
       "issue_type": "other",
-      "last_modified": "2026-11-17T20:42:23Z",
+      "last_modified": "2026-11-18T14:44:44Z",
       "name": "Link the user guide",
       "optional_fields": [
         "contact_first_name"
@@ -6121,7 +6396,7 @@
   ],
   "tickets": [
     {
-      "assigned_at": "2026-11-17T20:42:23Z",
+      "assigned_at": "2026-11-18T14:44:44Z",
       "assigned_staff": null,
       "assignee_name": "Sam Staff",
       "assignee_staff_id": 1,
@@ -6132,14 +6407,18 @@
       "in_scope_count": 1,
       "issue_count": 1,
       "issue_type": "save_form_pdf",
+      "last_activity_at": "2026-11-18T14:44:44Z",
       "last_email_received_at": "2026-11-17T14:15:00Z",
       "low_confidence": false,
       "needs_review": false,
+      "new_reply": false,
       "next_followup_date": null,
       "original_subject": "Save ASR as PDF",
+      "outlook_pending": null,
       "ownership_conflict": false,
       "possible_duplicate_of": null,
       "priority": "Normal",
+      "review_reason": null,
       "school_name": "Meadow View School",
       "school_njiis_id": null,
       "school_verification": "Unverified School",
@@ -6148,8 +6427,9 @@
       "sender_email": "gkim@meadow.example.org",
       "sender_name": "Grace Kim",
       "status": "Assigned",
+      "sync_state": "pending",
       "ticket_ref": "ASR-1B3A2055",
-      "updated_at": "2026-11-17T20:42:23Z"
+      "updated_at": "2026-11-18T14:44:44Z"
     },
     {
       "assigned_at": null,
@@ -6163,14 +6443,18 @@
       "in_scope_count": 1,
       "issue_count": 1,
       "issue_type": "other",
+      "last_activity_at": "2026-11-18T14:44:44Z",
       "last_email_received_at": "2026-11-16T17:40:00Z",
       "low_confidence": true,
       "needs_review": true,
+      "new_reply": false,
       "next_followup_date": null,
       "original_subject": "Question",
+      "outlook_pending": null,
       "ownership_conflict": false,
       "possible_duplicate_of": null,
       "priority": "Normal",
+      "review_reason": null,
       "school_name": null,
       "school_njiis_id": null,
       "school_verification": "Unverified School",
@@ -6179,11 +6463,12 @@
       "sender_email": "npatel@sunrise.example.org",
       "sender_name": "Noah Patel",
       "status": "Unassigned",
+      "sync_state": "pending",
       "ticket_ref": "ASR-500D7395",
-      "updated_at": "2026-11-17T20:42:23Z"
+      "updated_at": "2026-11-18T14:44:44Z"
     },
     {
-      "assigned_at": "2026-11-17T20:42:23Z",
+      "assigned_at": "2026-11-18T14:44:44Z",
       "assigned_staff": null,
       "assignee_name": "Sam Staff",
       "assignee_staff_id": 1,
@@ -6194,14 +6479,18 @@
       "in_scope_count": 1,
       "issue_count": 1,
       "issue_type": "lhd_access_denied",
+      "last_activity_at": "2026-11-18T14:44:44Z",
       "last_email_received_at": "2026-11-14T16:45:00Z",
       "low_confidence": false,
       "needs_review": false,
+      "new_reply": false,
       "next_followup_date": null,
       "original_subject": "ASR access for two of our schools",
+      "outlook_pending": null,
       "ownership_conflict": false,
       "possible_duplicate_of": null,
       "priority": "Normal",
+      "review_reason": null,
       "school_name": "Riverside Preschool",
       "school_njiis_id": "0067890",
       "school_verification": "Extracted - Not Verified",
@@ -6210,11 +6499,12 @@
       "sender_email": "egomez@district.example.org",
       "sender_name": "Elena Gomez",
       "status": "Assigned",
+      "sync_state": "pending",
       "ticket_ref": "ASR-481BDEA1",
-      "updated_at": "2026-11-17T20:42:23Z"
+      "updated_at": "2026-11-18T14:44:44Z"
     },
     {
-      "assigned_at": "2026-11-17T20:42:23Z",
+      "assigned_at": "2026-11-18T14:44:44Z",
       "assigned_staff": null,
       "assignee_name": "Teammate A",
       "assignee_staff_id": 2,
@@ -6225,14 +6515,18 @@
       "in_scope_count": 0,
       "issue_count": 1,
       "issue_type": "new_user_account",
+      "last_activity_at": "2026-11-18T14:44:44Z",
       "last_email_received_at": "2026-11-13T13:10:00Z",
       "low_confidence": false,
       "needs_review": false,
+      "new_reply": false,
       "next_followup_date": null,
       "original_subject": "New user account",
+      "outlook_pending": null,
       "ownership_conflict": false,
       "possible_duplicate_of": null,
       "priority": "Normal",
+      "review_reason": null,
       "school_name": "Hillcrest Middle School",
       "school_njiis_id": null,
       "school_verification": "Unverified School",
@@ -6241,11 +6535,12 @@
       "sender_email": "mlee@hillcrest.example.org",
       "sender_name": "Marcus Lee",
       "status": "Assigned",
+      "sync_state": "pending",
       "ticket_ref": "ASR-3C3C6CA1",
-      "updated_at": "2026-11-17T20:42:23Z"
+      "updated_at": "2026-11-18T14:44:44Z"
     },
     {
-      "assigned_at": "2026-11-17T20:42:23Z",
+      "assigned_at": "2026-11-18T14:44:44Z",
       "assigned_staff": null,
       "assignee_name": "Sam Staff",
       "assignee_staff_id": 1,
@@ -6256,14 +6551,18 @@
       "in_scope_count": 1,
       "issue_count": 2,
       "issue_type": "webinar_issue",
+      "last_activity_at": "2026-11-18T14:44:44Z",
       "last_email_received_at": "2026-11-12T15:30:00Z",
       "low_confidence": false,
       "needs_review": false,
+      "new_reply": false,
       "next_followup_date": null,
       "original_subject": "Webinar black screen and subtype question",
+      "outlook_pending": "handoff:failed",
       "ownership_conflict": false,
       "possible_duplicate_of": null,
       "priority": "Normal",
+      "review_reason": null,
       "school_name": "Brookside Elementary School",
       "school_njiis_id": "0045678",
       "school_verification": "Extracted - Not Verified",
@@ -6272,11 +6571,12 @@
       "sender_email": "pshah@brookside.example.org",
       "sender_name": "Priya Shah",
       "status": "Assigned",
+      "sync_state": "pending",
       "ticket_ref": "ASR-EE9A655A",
-      "updated_at": "2026-11-17T20:42:23Z"
+      "updated_at": "2026-11-18T14:44:44Z"
     },
     {
-      "assigned_at": "2026-11-17T20:42:23Z",
+      "assigned_at": "2026-11-18T14:44:44Z",
       "assigned_staff": null,
       "assignee_name": "Sam Staff",
       "assignee_staff_id": 1,
@@ -6287,14 +6587,18 @@
       "in_scope_count": 2,
       "issue_count": 1,
       "issue_type": "submission_confirm_receipt",
+      "last_activity_at": "2026-11-18T14:44:44Z",
       "last_email_received_at": "2026-11-15T13:02:00Z",
       "low_confidence": false,
       "needs_review": false,
+      "new_reply": false,
       "next_followup_date": null,
       "original_subject": "Did you receive our ASR?",
+      "outlook_pending": null,
       "ownership_conflict": false,
       "possible_duplicate_of": null,
       "priority": "Normal",
+      "review_reason": null,
       "school_name": "Pine Grove School",
       "school_njiis_id": "0034567",
       "school_verification": "Extracted - Not Verified",
@@ -6303,11 +6607,12 @@
       "sender_email": "tbaker@pinegrove.example.org",
       "sender_name": "Tom Baker",
       "status": "Assigned",
+      "sync_state": "pending",
       "ticket_ref": "ASR-5CC2B0C2",
-      "updated_at": "2026-11-17T20:42:23Z"
+      "updated_at": "2026-11-18T14:44:44Z"
     },
     {
-      "assigned_at": "2026-11-17T20:42:23Z",
+      "assigned_at": "2026-11-18T14:44:44Z",
       "assigned_staff": null,
       "assignee_name": "Sam Staff",
       "assignee_staff_id": 1,
@@ -6318,14 +6623,18 @@
       "in_scope_count": 1,
       "issue_count": 1,
       "issue_type": "school_subtype_missing",
+      "last_activity_at": "2026-11-18T14:44:44Z",
       "last_email_received_at": "2026-11-10T14:05:00Z",
       "low_confidence": false,
       "needs_review": false,
+      "new_reply": false,
       "next_followup_date": null,
       "original_subject": "School Subtype Error on the ASR",
+      "outlook_pending": null,
       "ownership_conflict": false,
       "possible_duplicate_of": null,
       "priority": "Normal",
+      "review_reason": null,
       "school_name": "Maple Leaf Academy",
       "school_njiis_id": "0012345",
       "school_verification": "Verified",
@@ -6334,29 +6643,34 @@
       "sender_email": "jrivera@mapleleaf.example.org",
       "sender_name": "Rivera, Jordan",
       "status": "In Progress",
+      "sync_state": "pending",
       "ticket_ref": "ASR-826E0B48",
-      "updated_at": "2026-11-17T20:42:23Z"
+      "updated_at": "2026-11-18T14:44:44Z"
     },
     {
-      "assigned_at": "2026-11-17T20:42:23Z",
+      "assigned_at": "2026-11-18T14:44:44Z",
       "assigned_staff": null,
       "assignee_name": "Sam Staff",
       "assignee_staff_id": 1,
-      "completed_at": "2026-11-17T20:42:23Z",
+      "completed_at": null,
       "display_id": "T-000006",
       "first_received_at": "2026-11-09T12:00:00Z",
       "id": 6,
       "in_scope_count": 0,
       "issue_count": 1,
       "issue_type": "user_guide",
+      "last_activity_at": "2026-11-18T14:44:44Z",
       "last_email_received_at": "2026-11-09T12:00:00Z",
       "low_confidence": false,
       "needs_review": false,
+      "new_reply": false,
       "next_followup_date": null,
       "original_subject": "User guide",
+      "outlook_pending": null,
       "ownership_conflict": false,
       "possible_duplicate_of": null,
       "priority": "Normal",
+      "review_reason": null,
       "school_name": null,
       "school_njiis_id": null,
       "school_verification": "Unverified School",
@@ -6364,9 +6678,10 @@
       "scope_state": "history",
       "sender_email": "achen@lakeside.example.org",
       "sender_name": "Ava Chen",
-      "status": "Done",
+      "status": "Assigned",
+      "sync_state": "pending",
       "ticket_ref": "ASR-338C57AF",
-      "updated_at": "2026-11-17T20:42:23Z"
+      "updated_at": "2026-11-18T14:44:44Z"
     }
   ]
 }

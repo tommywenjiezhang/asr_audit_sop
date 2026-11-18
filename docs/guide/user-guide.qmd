@@ -84,6 +84,8 @@ Emails are often filed into sub-folders. Tell the app which ones to read:
 6. Tick **and its subfolders** (6) so everything filed below your folder is included too.
 7. Read the blue **Scanning:** line (7). It says in plain words what the app will read.
 
+For shared mailboxes, the app also recovers child folders that classic Outlook does not expose through the ordinary folder collection by consulting the mailbox hierarchy. A folder that exists but cannot be opened is reported as a warning/error instead of being silently treated as empty.
+
 ![Choose your folder and its subfolders](images/05-settings-child-folders.png){fig-alt="Child folder options with My Folder and its subfolders ticked, and the Scanning summary line"}
 
 ::: {.callout-tip}
