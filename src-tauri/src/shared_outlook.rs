@@ -500,7 +500,7 @@ mod tests {
         assert!(hist.iter().any(|r| col_s(r, 0) == a && col(r, 1).is_some() && col_s(r, 2) == "assign"));
         let ops = for_tickets(c.as_mut(), &[t.clone()]).unwrap();
         assert_eq!(ops.len(), 2);
-        assert!(!ops[0].active && ops[1].active);
+        assert_eq!(ops.iter().filter(|o| o.active).count(), 1, "only the new run holds the reservation");
     }
 
     #[test]
