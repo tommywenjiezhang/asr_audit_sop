@@ -16,7 +16,7 @@ export interface TicketSummary {
   assignee_staff_id?: number | null; assignee_name?: string | null; assigned_at?: string | null; ownership_conflict: boolean;
   scope_state: "current" | "history" | "unverified"; scope_reason?: string | null; ticket_ref?: string | null; in_scope_count?: number;
   /** shared-database state of this case */
-  sync_state: SyncState; review_reason?: string | null;
+  sync_state: SyncState; review_reason?: string | null; new_reply?: boolean;
 }
 export type SyncState = "local" | "pending" | "synced" | "conflict" | "failed";
 export interface Ticket extends TicketSummary {
@@ -30,6 +30,8 @@ export interface CompletionRow {
   message_id: number; flagged_at?: string; moved_at?: string; dest_path?: string; last_error?: string; last_error_at?: string; attempts: number;
 }
 export interface CompletionOutcome { done: boolean; flagged: number; moved: number; failed: { message_id: number; subject: string; error: string }[]; dest_path: string }
+export interface DoneDecision { completion_id: string; covered: number; state: "pending" | "accepted" }
+export interface MarkDoneResult { decision: DoneDecision; outlook?: CompletionOutcome | null; outlook_message: string }
 export interface ListQuery {
   view?: string; sync?: string; status?: string; assignee?: string; reason?: string; school?: string; sender?: string; min_age_days?: number;
   assigned_from?: string; assigned_to?: string;
@@ -58,7 +60,7 @@ export interface ScopeStatus {
   configured: boolean; mailbox: string; summary: string; last_ok_at?: string | null; last_attempt_at?: string | null; last_error?: string | null;
   stale: boolean; running: boolean; current: number; history: number; unverified: number;
 }
-export interface OverviewRow { staff_id?: number | null; name: string; active: boolean; folder_path?: string | null; folder_in_scope: boolean; unassigned: number; assigned: number; in_progress: number; done: number }
+export interface OverviewRow { staff_id?: number | null; name: string; active: boolean; folder_path?: string | null; folder_in_scope: boolean; unassigned: number; assigned: number; in_progress: number; review: number; done: number }
 export interface Overview { scope_summary: string; last_reconciled_at?: string | null; done_from: string; done_to: string; rows: OverviewRow[]; awaiting_verification: number; notes: string[] }
 
 export const HISTORY_REASONS: [string, string][] = [
@@ -68,11 +70,14 @@ export const HISTORY_REASONS: [string, string][] = [
 export function reasonLabel(r?: string | null): string {
   return HISTORY_REASONS.find(([k]) => k === r)?.[1] ?? (r || "");
 }
-/** "Unassigned" / "Assigned to Aaron" / "In Progress — Aaron" / "Done — Aaron" */
+/** "Unassigned" / "Assigned to Aaron" / "In Progress — Aaron" / "Review — Aaron" / "Done — Aaron" */
 export function statusText(status: string, assignee?: string | null): string {
   if (status === "Unassigned" || !assignee) return status;
   if (status === "Assigned") return `Assigned to ${assignee}`;
   return `${status} — ${assignee}`;
+}
+export function statusBadge(status: string): string {
+  return status === "Done" ? "grey" : status === "Unassigned" ? "warn" : status === "Review" ? "err" : "ok";
 }
 export interface TicketField {
   key: string; extracted_value?: string; extraction_confidence?: string; manual_value?: string | null; verified: boolean;
@@ -176,7 +181,14 @@ export const api = {
   addSchool: (id: number) => invoke<number>("ticket_add_school", { id }),
   removeSchool: (id: number, slot: number) => invoke<void>("ticket_remove_school", { id, slot }),
   reopen: (id: number) => invoke<Ticket>("ticket_reopen", { id }),
-  complete: (id: number) => invoke<CompletionOutcome>("ticket_complete", { id }),
+  complete: (id: number) => invoke<MarkDoneResult>("ticket_complete", { id }),
+  archiveOutlook: (id: number) => invoke<CompletionOutcome>("ticket_archive_outlook", { id }),
+  claim: (id: number, takeover: boolean) => invoke<Ticket>("ticket_claim", { id, takeover }),
+  release: (id: number) => invoke<Ticket>("ticket_release", { id }),
+  flagReview: (id: number, reason: string) => invoke<Ticket>("ticket_flag_review", { id, reason }),
+  resume: (id: number) => invoke<Ticket>("ticket_resume", { id }),
+  join: (id: number, target: string) => invoke<Ticket>("ticket_join", { id, target }),
+  conflictRetry: (conflictId: string) => invoke<void>("conflict_retry", { conflictId }),
   prompt: (id: number) => invoke<string>("prompt_get", { id }),
   promptCopied: (id: number, text: string) => invoke<string>("prompt_copied", { id, text }),
   promptDefault: () => invoke<string>("prompt_default_instructions"),

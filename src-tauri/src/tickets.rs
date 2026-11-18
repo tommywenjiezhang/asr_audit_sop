@@ -14,10 +14,12 @@ pub const UNASSIGNED: &str = "Unassigned";
 pub const ASSIGNED: &str = "Assigned";
 pub const IN_PROGRESS: &str = "In Progress";
 pub const DONE: &str = "Done";
-/// Workflow statuses (stored separately from the assignee and from current/history placement).
-/// Assigned is set by assignment (or an owner inferred from a staff folder), In Progress by Start Work,
-/// Done only by `completion` (Mark Done). Review hints are badges, not statuses.
-pub const STATUSES: &[&str] = &[UNASSIGNED, ASSIGNED, IN_PROGRESS, DONE];
+pub const REVIEW: &str = "Review";
+/// Workflow statuses (stored separately from the owner, from current/history placement and from the
+/// shared-database sync state). Assigned = owner accepted (Claim / assignment), In Progress = Start Work,
+/// Review = a Done case got a new substantive reply or staff flagged it, Done = staff clicked Mark Done
+/// (no sent-reply verification). See `workflow` and `shared_workflow`.
+pub const STATUSES: &[&str] = &[UNASSIGNED, ASSIGNED, IN_PROGRESS, REVIEW, DONE];
 pub const PRIORITIES: &[&str] = &["Low", "Normal", "High", "Urgent"];
 pub const SYSTEM: &str = "system";
 /// SQL expression (alias `t`) for the "low confidence classification" badge.
@@ -62,6 +64,8 @@ pub struct TicketSummary {
     /// shared-database state: "local" | "pending" | "synced" | "conflict" | "failed"
     pub sync_state: String,
     pub review_reason: Option<String>,
+    /// an incoming email arrived after the last staff action on an open case
+    pub new_reply: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -462,7 +466,9 @@ pub fn list(conn: &Connection, q: &ListQuery) -> AppResult<ListResult> {
                 t.scope_state, t.scope_reason, t.ticket_ref,
                 (SELECT COUNT(*) FROM ticket_email_links l JOIN email_messages m ON m.id=l.message_id
                   WHERE l.ticket_id=t.id AND l.link_type IN ('original','reply') AND m.is_internal=0 AND m.scope_state='in'),
-                ({sync}), t.review_reason
+                ({sync}), t.review_reason,
+                (t.status <> 'Done' AND COALESCE(t.last_email_received_at,'') > COALESCE((SELECT MAX(h.at) FROM ticket_history h WHERE h.ticket_id=t.id
+                    AND h.actor NOT IN ('system','sync') AND h.action NOT LIKE 'Copilot%' AND h.action NOT LIKE 'Opened%'), t.created_at))
          FROM tickets t WHERE {w} ORDER BY {order} LIMIT {limit} OFFSET {}",
         q.offset.max(0),
         sync = crate::sync_queue::TICKET_SYNC_SQL
@@ -503,6 +509,7 @@ pub fn list(conn: &Connection, q: &ListQuery) -> AppResult<ListResult> {
                 in_scope_count: r.get(27)?,
                 sync_state: r.get(28)?,
                 review_reason: r.get(29)?,
+                new_reply: r.get::<_, i64>(30)? != 0,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -703,6 +710,36 @@ pub struct TicketPatch {
 }
 
 pub fn update(conn: &Connection, id: i64, p: &TicketPatch, actor: &str) -> AppResult<Ticket> {
+    if let Some(s) = p.status.as_deref() {
+        if !STATUSES.contains(&s) {
+            return Err(AppError::coded("INVALID", "Unknown status"));
+        }
+        let cur = get(conn, id)?;
+        if s != cur.status {
+            match (s, cur.status.as_str()) {
+                (DONE, _) => return Err(AppError::coded("INVALID", "Use Mark Done to complete a ticket.")),
+                (ASSIGNED | UNASSIGNED, _) => return Err(AppError::coded("INVALID", "Use Claim / Take over (or Assign) to change the owner.")),
+                (IN_PROGRESS, DONE) => {
+                    crate::workflow::reopen(conn, id, actor, "Reopened by staff")?;
+                }
+                (IN_PROGRESS, UNASSIGNED) => return Err(AppError::coded("INVALID", "Claim or assign the ticket before starting work.")),
+                (IN_PROGRESS, _) => {
+                    crate::workflow::start_work(conn, id, actor)?;
+                }
+                (REVIEW, _) => {
+                    crate::workflow::flag_review(conn, id, "Flagged for review", actor)?;
+                }
+                _ => {}
+            }
+        }
+        if p.priority.is_none() && p.issue_type.is_none() && p.assigned_staff.is_none() && p.internal_notes.is_none() && p.resolution_notes.is_none()
+            && p.next_followup_date.is_none() && p.sender_name.is_none() && p.sender_email.is_none() && p.staff_actions.is_none()
+            && p.clear_duplicate_flag.is_none() && p.clear_needs_review.is_none()
+        {
+            return get(conn, id);
+        }
+        return update(conn, id, &TicketPatch { status: None, ..p.clone() }, actor);
+    }
     // the old single notes box: a changed text becomes a new note (notes are separate records now)
     if let Some(n) = p.internal_notes.as_deref().map(str::trim).filter(|n| !n.is_empty() && n.len() <= 50_000) {
         let last: Option<String> = conn.query_row("SELECT body FROM ticket_notes WHERE ticket_id=?1 AND deleted=0 ORDER BY id DESC LIMIT 1", [id], |r| r.get(0)).optional()?;
@@ -737,27 +774,6 @@ pub fn update(conn: &Connection, id: i64, p: &TicketPatch, actor: &str) -> AppRe
                 }
             }
         };
-    }
-    if let Some(s) = &p.status {
-        if !STATUSES.contains(&s.as_str()) {
-            return Err(AppError::coded("INVALID", "Unknown status"));
-        }
-        if s == DONE && cur.status != DONE {
-            // Done requires the Outlook completion steps; see completion.rs (Mark Done).
-            return Err(AppError::coded("INVALID", "Use Mark Done to complete a ticket."));
-        }
-        if (s == ASSIGNED || s == UNASSIGNED) && *s != cur.status {
-            return Err(AppError::coded("INVALID", "Use Assign / Reassign to change the owner."));
-        }
-        if s == IN_PROGRESS && cur.status == DONE {
-            reopen(&tx, id, actor, "Reopened by staff")?;
-            changed = true;
-        } else if s == IN_PROGRESS && cur.status == ASSIGNED {
-            start_work_tx(&tx, id, actor)?;
-            changed = true;
-        } else if s == IN_PROGRESS && cur.status == UNASSIGNED {
-            return Err(AppError::coded("INVALID", "Assign the ticket before starting work."));
-        }
     }
     if let Some(s) = &p.priority {
         if !PRIORITIES.contains(&s.as_str()) {
@@ -837,15 +853,9 @@ pub fn reopen(conn: &Connection, id: i64, actor: &str, reason: &str) -> AppResul
     Ok(())
 }
 
-fn start_work_tx(conn: &Connection, id: i64, actor: &str) -> AppResult<()> {
-    conn.execute("UPDATE tickets SET status=?2, updated_at=?3 WHERE id=?1 AND status=?4", params![id, IN_PROGRESS, now(), ASSIGNED])?;
-    history(conn, id, actor, "Work started", Some("status"), Some(ASSIGNED), Some(IN_PROGRESS))?;
-    Ok(())
-}
-
-/// Start Work: Assigned -> In Progress, keeping the owner.
+/// Start Work: Assigned (or Review) -> In Progress, keeping the owner.
 pub fn start_work(conn: &Connection, id: i64, actor: &str) -> AppResult<Ticket> {
-    update(conn, id, &TicketPatch { status: Some(IN_PROGRESS.into()), ..Default::default() }, actor)
+    crate::workflow::start_work(conn, id, actor)
 }
 
 /// Stable reference for a ticket, the same on every computer that imports the same original email
@@ -871,7 +881,7 @@ pub fn ensure_ticket_ref(conn: &Connection, id: i64) -> AppResult<String> {
     Ok(r)
 }
 
-/// Mark a ticket Done locally. Only called by `completion` after the required Outlook steps succeeded.
+/// Set a ticket Done locally (low-level; staff use `workflow::mark_done`, which also records coverage).
 pub fn set_done(conn: &Connection, id: i64, actor: &str, note: &str) -> AppResult<()> {
     let ts = now();
     let cur: String = conn.query_row("SELECT status FROM tickets WHERE id=?1", [id], |r| r.get(0))?;
@@ -1358,10 +1368,10 @@ pub fn ingest(conn: &Connection, msgs: &[IncomingMessage], settings: &Settings) 
                 }
             }
             refresh_school_columns(&tx, tid)?;
-            // a genuinely new incoming email reopens a Done ticket (rescans never get here: dedup above)
+            // a genuinely new substantive reply moves a Done ticket to Review (rescans never get here: dedup
+            // above; older emails found later and automatic replies do not reopen)
             if status == DONE {
-                let who = if m.sender_name.trim().is_empty() { m.sender_email.clone() } else { m.sender_name.clone() };
-                reopen(&tx, tid, SYSTEM, &format!("Reopened: new email received from {who}"))?;
+                crate::workflow::on_new_incoming(&tx, tid, mid)?;
             }
             crate::search::reindex(&tx, tid)?;
             touched.insert(tid);
@@ -1497,14 +1507,14 @@ pub mod tests {
         ingest(&c, &[msg(1, "C1", "Subtype", "Our school is missing the subtype.", "jane@school.org")], &s).unwrap();
         set_field(&c, 1, "school_njiis_id", Some("777777".into()), true, "staff").unwrap();
         set_field(&c, 1, "school_type", Some("Public".into()), false, "staff").unwrap();
-        set_done(&c, 1, "staff", "Marked Done").unwrap();
+        crate::workflow::mark_done(&c, 1, "staff").unwrap();
         let r = ingest(&c, &[msg(2, "C1", "RE: Subtype", "We are a charter school. School ID: 123456", "jane@school.org")], &s).unwrap();
         assert_eq!(r.updated_tickets, 1);
         assert_eq!(r.created_tickets, 0);
         let t = get(&c, 1).unwrap();
-        assert_eq!(t.status, UNASSIGNED, "a new reply reopens a Done ticket (no owner -> Unassigned)");
-        assert!(t.completed_at.is_none());
-        assert!(history_rows(&c, 1).unwrap().iter().any(|h| h.action.starts_with("Reopened: new email received from")));
+        assert_eq!(t.status, REVIEW, "a new reply moves a Done ticket to Review");
+        assert!(t.review_reason.as_deref().unwrap_or("").starts_with("New reply from"));
+        assert!(history_rows(&c, 1).unwrap().iter().any(|h| h.action.starts_with("Reopened for review: new reply from")));
         assert_eq!(t.school_njiis_id.as_deref(), Some("777777"), "verified value must not be overwritten");
         assert_eq!(t.school_verification, "Verified");
         let f = fields(&c, 1).unwrap();

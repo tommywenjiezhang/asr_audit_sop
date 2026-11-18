@@ -684,6 +684,11 @@ pub fn record_result(conn: &Connection, row: i64, res: &OpResult) -> AppResult<O
             params![c.conflict_id, op_id, local, c.field_name, c.conflict_type, c.original, c.proposed, c.shared, c.reason, now()],
         )?;
     }
+    // Done decisions: accepted, or superseded by a newer reply (kept as history either way)
+    if op_type == "ticket.done" {
+        let st = if state == "accepted" { "accepted" } else { "superseded" };
+        tx.execute("UPDATE completion_history SET state=?2, state_reason=COALESCE(?3, state_reason) WHERE op_id=?1", params![op_id, st, if st == "superseded" { Some(res.message.clone()) } else { None }])?;
+    }
     // a successful retry settles the conflict it was made for
     if state == "accepted" {
         tx.execute("UPDATE sync_conflicts SET status='resolved', resolved_at=?2, resolution='retried' WHERE resolve_op_id=?1", params![op_id, now()])?;
@@ -729,7 +734,8 @@ pub fn merge_local(conn: &Connection, from: i64, into: i64) -> AppResult<()> {
         params![from, into],
     )?;
     conn.execute("INSERT OR IGNORE INTO ticket_issues(ticket_id, issue_type, source, position) SELECT ?2, issue_type, source, position+100 FROM ticket_issues WHERE ticket_id=?1", params![from, into])?;
-    conn.execute("UPDATE tickets SET merged_into=?2, shared_state='shared', shared_id=NULL, updated_at=?3 WHERE id=?1", params![from, into, now()])?;
+    // the hidden row keeps its own shared id (a redirect in the shared database); it is never listed
+    conn.execute("UPDATE tickets SET merged_into=?2, updated_at=?3 WHERE id=?1", params![from, into, now()])?;
     crate::tickets::history(conn, into, "sync", "Combined with a duplicate local ticket for the same email", None, Some(&crate::tickets::display_id(from)), None)?;
     crate::search::reindex(conn, into)?;
     crate::search::reindex(conn, from)?;

@@ -2,9 +2,13 @@
 
 ## The workflow at a glance
 
-**Scan → Review ticket → Copy Prompt → paste into Copilot → Open Outlook Reply → paste Copilot's reply, review it and send it yourself → Mark Done**
+**Scan → Claim the case → Copy Prompt → paste into Copilot → Open Outlook Reply → paste Copilot's reply, review it and send it yourself → Mark Done**
 
-When you click Mark Done, the app flags the ticket's email(s) complete in Outlook and moves them to your completion folder.
+One ticket is one **support case**. A case can hold several schools, several issue types and several emails, and one person is its current **owner** while others can add notes.
+
+**Mark Done** records your decision immediately (no check of Sent Items is needed). If the sender writes again later, the case moves to **Review** so the reply is not missed.
+
+With the shared team database, everyone sees the same cases, owners, notes and history. The app always saves on your computer first, so you can keep working when the network share is not available; your changes show **Saved locally — pending sync** until they reach the shared database.
 
 The app never writes or sends the reply itself, and it does not connect to Copilot or any other AI service. You copy the prompt into Microsoft Copilot and paste Copilot's answer into Outlook yourself.
 
@@ -46,10 +50,33 @@ Click **Check Now** (bottom left, or in the tray menu) at any time. Closing the 
 
 ---
 
-## 1a. Current Tickets, Awaiting Verification, Ticket History
+## 1a. Team Tickets, My Tickets, Unassigned
+
+These views show the **shared team cases**, whichever Outlook folder their emails are in:
+
+- **Team Tickets** — every case. Filter by status, owner, issue, school, sender, dates, and **sync state** (pending, conflict, failed).
+- **My Tickets** — open cases you own (choose who you are in Settings › Staff Assignment › **I am**).
+- **Unassigned** — cases nobody owns yet.
+
+The bar above the list shows the shared database state and when shared data was last refreshed. One computer's folder scan is not complete team coverage; that is what the views below are for.
+
+**Statuses**
+
+| Status | Meaning |
+|---|---|
+| **Unassigned** | Nobody owns the case |
+| **Assigned to …** | Someone took responsibility (Claim); work has not started |
+| **In Progress — …** | Work has started (**Start Work**) |
+| **Review — …** | A Done case received a new reply, or someone flagged it for review (the reason is shown). The owner is kept |
+| **Done — …** | Someone clicked **Mark Done** |
+
+Sync problems and pending Outlook work are **badges**, not statuses: *pending sync*, *conflict*, *sync failed*, *new reply*.
+
+## 1b. Current Tickets, Awaiting Location Check, Ticket History
 
 - **Current Tickets** shows a ticket only when at least one of its emails is **now** in the selected folders (the completion folder never counts). A ticket with emails in several folders is shown once; each email shows whether it is in the current folders.
-- **Awaiting Verification** appears after an update or after you change the folder selection: these tickets have not been confirmed yet. Click **Check Now**. They are not claimed to be current.
+- **Awaiting Location Check** (formerly *Awaiting Verification*) appears after an update or after you change the folder selection: the app has not yet confirmed where these tickets' emails are. Click **Check Now**. They are not claimed to be current. (This is about email location only; replies never need to be "verified" before Mark Done.)
+- **Changing the folder selection** immediately stops showing the previous folder's results as current; nothing is deleted — the cases stay in Team Tickets and History.
 - **Ticket History** holds earlier tickets whose emails are no longer in the selected folders, with the reason: *Completed*, *Reassigned outside the selected scope*, *Moved elsewhere*, *No longer found after successful reconciliation* (never "deleted"). Opening one changes nothing; you can still copy the prompt and open the email if Outlook can find it.
 - Every check first imports new emails, then verifies where all known emails are now — independent of the date window and the unread-only setting. A check that fails or is incomplete never moves tickets to History. Emails moved by hand are followed without duplicates; an email that comes back into your folders brings its ticket back.
 - The grey bar above the list shows the mailbox, the selected folders, the last successful verification, and whether a check is running, incomplete or stale.
@@ -133,25 +160,26 @@ If the original email was deleted or moved somewhere the app can't see, **Open O
 
 ---
 
-## 4. Mark Done, Retry and Reopen
+## 4. Claim, Start Work, Review, Mark Done
 
-When you click **Mark Done**:
+**Claim** makes you the owner. Nothing moves in Outlook and nobody is emailed. If someone else already owns the case, the button is **Take over…**: their notes, history and ownership dates are kept. **Clear owner** makes the case Unassigned again.
 
-1. Every incoming email of the ticket (the original and later replies from the sender) is **flagged complete** in Outlook.
-2. Each one is **moved** to the completion folder.
-3. Only when all of them succeed does the ticket become **Done**. The completion time is saved and the history records what happened.
+If two people claim the same case at the same time, the shared database accepts the first one. The other person sees the confirmed owner and a **Conflict** panel ("Aaron claimed this case first") with **Keep shared value** or **Take over…** — never a silent change.
 
-Your own sent replies, drafts and staff emails are never touched. Nothing is ever deleted.
+**Start Work** (owner required) → In Progress. **Flag for Review…** asks for a reason; **Review handled** continues the work.
 
-**If something fails** (Outlook closed, no permission on the folder, an email deleted, …):
+**Mark Done** records your decision immediately — also offline. It saves who, when and which incoming emails it covers. No sent-reply check, and no email is sent to anyone.
 
-- The ticket stays **In Progress**.
-- The failing email and the reason are shown.
-- Fix the problem, then click **Retry Mark Done**. Steps that already succeeded are not repeated: an email that was flagged but not moved is only moved, and an email that was already moved is never moved again.
+- *Standalone computer:* the app then flags the covered emails complete in Outlook and moves them to the completion folder. If that fails, the case **stays Done** and shows the Outlook problem; **Archive in Outlook** retries only the missing steps.
+- *Shared database:* Outlook is not changed right away. Once the shared database confirms the Done decision, use **Archive in Outlook** to flag and move the covered emails. A reply that arrived later is never archived under the older decision.
 
-**Reopen** puts a Done ticket back to In Progress. This changes the ticket only: the archived email stays where it is and keeps its Complete flag.
+**New replies.** If the sender writes again after Done, the case moves to **Review — New reply from …** for everyone, with the owner kept. If the reply arrived *while* you were marking Done (for example you were offline), your Done is not applied; you see a conflict explaining why and **Mark Done again** after you handled the reply. Older emails found later, automatic replies (out of office, undeliverable) and staff emails do not reopen a case.
 
-If the sender **replies** to a Done ticket, the ticket reopens automatically as In Progress and the history says why. Rescanning old emails never reopens a ticket. Marking it Done again completes only the new email.
+**Reopen** puts a Done case back to In Progress (or Unassigned). The archived email stays where it is.
+
+**Add to existing case…** puts this case into another case (enter its T-number or ASR reference): its emails, notes and issue types move there and the old reference keeps working. Nothing changes in Outlook. Cases are never combined automatically just because the sender or school is the same.
+
+**Notes** are separate entries with author and time; notes from different people never overwrite each other.
 
 ---
 
@@ -175,9 +203,9 @@ The approved SOP wording for each issue is still kept in **SOP Templates**, and 
 
 ---
 
-## 6a. Assigning tickets
+## 6a. Assigning tickets (Outlook moves and handoff)
 
-Statuses: **Unassigned**, **Assigned to …**, **In Progress — …** (after **Start Work**), **Done — …**.
+> **With the shared team database**, use **Claim / Take over** for now. Assign/Reassign (which moves emails into a staff folder and sends a handoff email) returns in the next release, when moves are reserved in the shared database first so two computers can never move or notify twice. On a **Standalone** computer, Assign works as described below.
 
 1. Open a ticket and click **Assign** / **Reassign**, or tick several tickets in the list and click **Assign selected**.
 2. Choose the person. The dialog shows their notification email, destination folder, number of tickets and emails, and whether a notification will be sent. Add an optional handoff note and click **Assign**.
@@ -195,7 +223,7 @@ Problems:
 
 **Team Overview** (left menu) counts tickets per person. Unassigned / Assigned / In Progress come from emails confirmed in your selected folders; Done counts are this computer's records for the chosen dates. Staff folders outside your selected folders are marked *not reconciled*.
 
-**Several computers:** each computer has its own database. The Outlook folder an email is in (its owner) is shared; notes, statuses and history are not. A colleague's app picks up a ticket you assigned when it checks their folder. If someone moves emails into a staff folder by hand, the owner updates on the next check, but **no notification** is sent. T-numbers are local; the *ASR-…* reference in handoff emails is the same everywhere.
+**Several computers:** with the shared database, cases, owners, statuses, notes and history are shared (see *Settings › Shared Database* and [SHARED_DATABASE.md](SHARED_DATABASE.md)). Moving an email into someone's folder by hand never changes the owner by itself once the shared database is connected; it is shown on the email. T-numbers are local to each computer; the *ASR-…* reference is the same everywhere.
 
 ---
 
@@ -207,7 +235,8 @@ Problems:
 | Open a Reply / Reply All / new-message window | Only when you click the button. You send the email yourself |
 | Move emails to a staff member's folder | **Only** when you click **Assign** / **Reassign** (or Retry assignment) |
 | Send a handoff email to the assigned staff member | **Only** after a successful assignment you started (or Retry Notification) |
-| Flag emails complete and move them to the completion folder | **Only** when you click **Mark Done** (or Retry) |
+| Flag emails complete and move them to the completion folder | Standalone: right after **Mark Done**. Shared database: **only** when you click **Archive in Outlook** after the Done decision is confirmed. Only emails covered by that decision |
+| Change Outlook because of **Claim**, **Take over**, **Review**, notes or **Add to existing case** | **Never** |
 | Send to schools/senders, delete, mark read/unread | **Never** |
 
 The app also never stores your Outlook password, never sends data to external or AI services, and never overwrites values you entered or verified.

@@ -182,7 +182,10 @@ pub fn run_cycle(local: &Mutex<Connection>, shared: &mut dyn SharedConn, dev: &D
         }
     }
     let ids: Vec<String> = wanted.into_iter().collect();
-    for b in sa::fetch_bundles(shared, &ids)? {
+    // cases joined into another case are applied after the case they point to
+    let mut bundles = sa::fetch_bundles(shared, &ids)?;
+    bundles.sort_by_key(|b| b.core.merged_into.as_deref().map(|m| !m.is_empty()).unwrap_or(false));
+    for b in bundles {
         let conn = lock(local);
         match q::apply_bundle(&conn, &b) {
             Ok(_) => rep.pulled += 1,

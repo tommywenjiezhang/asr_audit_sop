@@ -12,7 +12,7 @@
     try { o = await api.overview(from ? localDayStart(from) : "", to ? localDayStart(to, 1) : ""); } catch (e) { toast(errMsg(e), "error"); }
   }
   $effect(() => { void from; void to; void app.ticketsVersion; load(); });
-  const total = (k: "unassigned" | "assigned" | "in_progress" | "done") => (o?.rows ?? []).reduce((n, r) => n + r[k], 0);
+  const total = (k: "unassigned" | "assigned" | "in_progress" | "review" | "done") => (o?.rows ?? []).reduce((n, r) => n + r[k], 0);
 </script>
 
 <div class="scroll" style="height:100%;padding:16px">
@@ -25,7 +25,7 @@
       <span class="muted">Done between</span><input type="date" style="width:150px" bind:value={from} /><span class="muted">and</span><input type="date" style="width:150px" bind:value={to} /><span class="muted">(end date included)</span>
     </div>
     <table class="grid panel">
-      <thead><tr><th>Staff</th><th>Folder</th><th class="num">Unassigned</th><th class="num">Assigned</th><th class="num">In Progress</th><th class="num">Done (local)</th></tr></thead>
+      <thead><tr><th>Staff</th><th>Folder</th><th class="num">Unassigned</th><th class="num">Assigned</th><th class="num">In Progress</th><th class="num">Review</th><th class="num">Done (local)</th></tr></thead>
       <tbody>
         {#each o.rows as r (r.staff_id ?? 0)}
           <tr class:muted={!r.active}>
@@ -34,10 +34,11 @@
             <td class="num">{r.staff_id == null ? r.unassigned : ""}</td>
             <td class="num">{r.staff_id == null ? "" : r.assigned}</td>
             <td class="num">{r.in_progress}</td>
+            <td class="num">{r.review}</td>
             <td class="num">{r.done}</td>
           </tr>
         {/each}
-        <tr><td><b>Total</b></td><td></td><td class="num"><b>{total("unassigned")}</b></td><td class="num"><b>{total("assigned")}</b></td><td class="num"><b>{total("in_progress")}</b></td><td class="num"><b>{total("done")}</b></td></tr>
+        <tr><td><b>Total</b></td><td></td><td class="num"><b>{total("unassigned")}</b></td><td class="num"><b>{total("assigned")}</b></td><td class="num"><b>{total("in_progress")}</b></td><td class="num"><b>{total("review")}</b></td><td class="num"><b>{total("done")}</b></td></tr>
       </tbody>
     </table>
     <ul class="small muted notes">{#each o.notes as n}<li>{n}</li>{/each}</ul>

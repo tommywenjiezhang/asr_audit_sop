@@ -788,6 +788,7 @@ mod tests {
         let pend = pending_moves(&c, op).unwrap();
         apply_moves(&c, op, &sc, &pend, &pend.iter().map(|m| moved(m.message_id, &format!("W{}", m.message_id), "F-WEN", "Inbox/Wenjie")).collect::<Vec<_>>()).unwrap();
         // Mark Done uses the new locations and keeps the owner
+        crate::workflow::mark_done(&c, 1, "Sam").unwrap();
         let items = crate::completion::pending(&c, 1).unwrap();
         assert_eq!(items.len(), 2);
         assert!(items.iter().all(|i| i.entry_id.starts_with('W')));

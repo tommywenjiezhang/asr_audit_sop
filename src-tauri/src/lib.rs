@@ -32,6 +32,7 @@ pub mod sync_core;
 pub mod sync_queue;
 pub mod templates_store;
 pub mod tickets;
+pub mod workflow;
 
 #[cfg(feature = "app")]
 mod shell;

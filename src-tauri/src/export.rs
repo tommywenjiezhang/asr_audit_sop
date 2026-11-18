@@ -33,7 +33,7 @@ fn scalar(conn: &Connection, sql: &str) -> AppResult<i64> {
 }
 
 pub fn report(conn: &Connection) -> AppResult<Report> {
-    let open_set = "('Unassigned','Assigned','In Progress')";
+    let open_set = "('Unassigned','Assigned','In Progress','Review')";
     let by_issue_raw = pairs(conn, "SELECT issue_type, COUNT(*) FROM tickets GROUP BY issue_type ORDER BY 2 DESC")?;
     let by_issue = by_issue_raw
         .into_iter()

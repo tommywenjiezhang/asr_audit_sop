@@ -124,7 +124,72 @@ pub async fn ticket_remove_school(state: State<'_, AppState>, id: i64, slot: i64
 #[tauri::command]
 pub async fn ticket_reopen(state: State<'_, AppState>, id: i64) -> AppResult<tickets::Ticket> {
     let a = actor(&state);
-    tickets::update(&state.db.lock().unwrap(), id, &TicketPatch { status: Some(tickets::IN_PROGRESS.into()), ..Default::default() }, &a)
+    let t = crate::workflow::reopen(&state.db.lock().unwrap(), id, &a, "Reopened by staff")?;
+    sync::nudge_shared(&state);
+    Ok(t)
+}
+
+/// Claim (or Take over with `takeover`): ownership only — emails stay where they are, no notification.
+#[tauri::command]
+pub async fn ticket_claim(state: State<'_, AppState>, id: i64, takeover: bool) -> AppResult<tickets::Ticket> {
+    let a = actor(&state);
+    let t = crate::workflow::claim(&state.db.lock().unwrap(), id, &a, takeover)?;
+    sync::nudge_shared(&state);
+    Ok(t)
+}
+
+#[tauri::command]
+pub async fn ticket_release(state: State<'_, AppState>, id: i64) -> AppResult<tickets::Ticket> {
+    let a = actor(&state);
+    let t = crate::workflow::release(&state.db.lock().unwrap(), id, &a)?;
+    sync::nudge_shared(&state);
+    Ok(t)
+}
+
+#[tauri::command]
+pub async fn ticket_flag_review(state: State<'_, AppState>, id: i64, reason: String) -> AppResult<tickets::Ticket> {
+    let a = actor(&state);
+    let t = crate::workflow::flag_review(&state.db.lock().unwrap(), id, &reason, &a)?;
+    sync::nudge_shared(&state);
+    Ok(t)
+}
+
+#[tauri::command]
+pub async fn ticket_resume(state: State<'_, AppState>, id: i64) -> AppResult<tickets::Ticket> {
+    let a = actor(&state);
+    let t = crate::workflow::resume(&state.db.lock().unwrap(), id, &a)?;
+    sync::nudge_shared(&state);
+    Ok(t)
+}
+
+/// Add to Existing Case: `target` is a ticket number (T-000123) or a stable reference (ASR-…).
+#[tauri::command]
+pub async fn ticket_join(state: State<'_, AppState>, id: i64, target: String) -> AppResult<tickets::Ticket> {
+    use rusqlite::OptionalExtension;
+    let a = actor(&state);
+    let conn = state.db.lock().unwrap();
+    let tgt = target.trim();
+    let digits = tgt.trim_start_matches(['T', 't']).trim_start_matches('-');
+    let tid: Option<i64> = if !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit()) {
+        digits.parse().ok()
+    } else {
+        conn.query_row("SELECT id FROM tickets WHERE upper(ticket_ref)=upper(?1) AND merged_into IS NULL", [tgt], |r| r.get(0)).optional()?
+    };
+    let tid = tid.ok_or_else(|| AppError::coded("NOT_FOUND", format!("No case {tgt} on this computer. Use the ticket number (T-…) or reference (ASR-…).")))?;
+    let t = crate::workflow::join(&conn, id, tid, &a)?;
+    drop(conn);
+    sync::nudge_shared(&state);
+    Ok(t)
+}
+
+/// Retry a refused action against the latest shared version (explicit; the conflict closes only when
+/// the shared database accepts the retry).
+#[tauri::command]
+pub async fn conflict_retry(state: State<'_, AppState>, conflict_id: String) -> AppResult<()> {
+    let a = actor(&state);
+    crate::workflow::retry_conflict(&state.db.lock().unwrap(), &conflict_id, &a)?;
+    sync::nudge_shared(&state);
+    Ok(())
 }
 
 // ------------------------------------------------------------------ Copilot prompt
@@ -241,22 +306,72 @@ fn busy<'a>(set: &'a std::sync::Mutex<std::collections::HashSet<i64>>, id: i64) 
     Ok(BusyGuard { set, id })
 }
 
-/// Mark Done: flag the ticket's incoming emails complete and move them to the completion folder, then
-/// set the ticket Done. Partial failures keep the ticket In Progress; calling again retries only what is left.
+#[derive(Serialize)]
+pub struct MarkDoneResult {
+    pub decision: crate::workflow::DoneDecision,
+    /// Outlook archiving result when it ran (standalone mode with a completion folder)
+    pub outlook: Option<completion::Outcome>,
+    /// plain-language note about Outlook (not updated / failed / done)
+    pub outlook_message: String,
+}
+
+fn shared_bound(state: &AppState) -> bool {
+    let conn = state.db.lock().unwrap();
+    crate::sync_queue::mode(&conn) == crate::sync_queue::MODE_SHARED && crate::sync_queue::bound_db(&conn).is_some()
+}
+
+/// Mark Done: the staff decision is saved at once (works offline; no sent-reply verification). With a
+/// shared database, Outlook archiving is a separate step after the shared database accepted the decision;
+/// on a standalone computer it runs right away. An Outlook failure never undoes the Done decision.
 #[tauri::command]
-pub async fn ticket_complete(state: State<'_, AppState>, id: i64) -> AppResult<completion::Outcome> {
+pub async fn ticket_complete(state: State<'_, AppState>, id: i64) -> AppResult<MarkDoneResult> {
     let _guard = busy(&state.completing, id)?;
-    let s = settings(&state);
     let a = actor(&state);
-    let items = {
+    let decision = crate::workflow::mark_done(&state.db.lock().unwrap(), id, &a)?;
+    sync::nudge_shared(&state);
+    if shared_bound(&state) {
+        return Ok(MarkDoneResult { decision, outlook: None, outlook_message: "Outlook was not changed yet. After the shared database confirms the Done decision, use Archive in Outlook to flag and move the covered emails.".into() });
+    }
+    if settings(&state).archive_folder.is_none() {
+        return Ok(MarkDoneResult { decision, outlook: None, outlook_message: "Outlook was not changed: no completion folder is configured (Settings › Completion Folder).".into() });
+    }
+    let (outlook, outlook_message) = match run_archive(&state, id).await {
+        Ok(o) if o.done => (Some(o.clone()), if o.dest_path.is_empty() { "No Outlook emails to archive.".into() } else { format!("Outlook updated: {} email(s) flagged complete and moved to {}.", o.moved, o.dest_path) }),
+        Ok(o) => (Some(o), "The case is Done, but some Outlook steps failed. Use Retry Outlook update.".into()),
+        Err(e) => (None, format!("The case is Done, but Outlook could not be updated: {e} Use Retry Outlook update.")),
+    };
+    Ok(MarkDoneResult { decision, outlook, outlook_message })
+}
+
+/// Archive in Outlook (after Mark Done): flag complete + move only the emails covered by the latest Done
+/// decision. With a shared database the decision must be accepted there and the case still Done.
+#[tauri::command]
+pub async fn ticket_archive_outlook(state: State<'_, AppState>, id: i64) -> AppResult<completion::Outcome> {
+    let _guard = busy(&state.completing, id)?;
+    {
         let conn = state.db.lock().unwrap();
         let t = tickets::get(&conn, id)?;
-        if t.status == tickets::DONE {
-            return Ok(completion::Outcome { done: true, flagged: 0, moved: 0, failed: vec![], dest_path: String::new() });
+        if t.status != tickets::DONE {
+            return Err(AppError::coded("NOT_DONE", "Only Done cases are archived in Outlook."));
         }
+        if crate::sync_queue::mode(&conn) == crate::sync_queue::MODE_SHARED && crate::sync_queue::bound_db(&conn).is_some() {
+            let st: Option<String> = conn.query_row("SELECT state FROM completion_history WHERE ticket_id=?1 ORDER BY decided_at DESC, id DESC LIMIT 1", [id], |r| r.get(0)).ok();
+            if !matches!(st.as_deref(), Some("accepted") | Some("legacy")) || t.sync_state != "synced" {
+                return Err(AppError::coded("NOT_CONFIRMED", "The Done decision is not confirmed by the shared database yet (or the case has unsynchronized changes). Sync first; Outlook is changed only for confirmed decisions."));
+            }
+        }
+    }
+    run_archive(&state, id).await
+}
+
+async fn run_archive(state: &AppState, id: i64) -> AppResult<completion::Outcome> {
+    let s = settings(state);
+    let a = actor(state);
+    let items = {
+        let conn = state.db.lock().unwrap();
         let items = completion::pending(&conn, id)?;
         if items.is_empty() {
-            return completion::finish_without_outlook(&conn, id, &a);
+            return Ok(completion::Outcome { done: true, flagged: 0, moved: 0, failed: vec![], dest_path: String::new() });
         }
         items
     };
@@ -269,11 +384,11 @@ pub async fn ticket_complete(state: State<'_, AppState>, id: i64) -> AppResult<c
         .map(|i| {
             serde_json::json!({
                 "message_id": i.message_id, "entry_id": i.entry_id, "store_id": i.store_id, "imid": i.internet_message_id,
-                "folders": candidate_folders(&state, &s, &i.store_id, &i.folder_entry_id), "need_flag": i.need_flag, "need_move": i.need_move,
+                "folders": candidate_folders(state, &s, &i.store_id, &i.folder_entry_id), "need_flag": i.need_flag, "need_move": i.need_move,
             })
         })
         .collect();
-    let cfg = sync::worker_config(&state)?;
+    let cfg = sync::worker_config(state)?;
     let params = serde_json::json!({"dest": {"store_id": dest.store_id, "entry_id": dest.entry_id}, "items": req_items});
     // no automatic retries: results must be recorded before anything is attempted again
     let res = crate::outlook::call(&cfg, "complete_messages", params, Duration::from_secs(180)).await.and_then(crate::outlook::into_result);
@@ -282,11 +397,13 @@ pub async fn ticket_complete(state: State<'_, AppState>, id: i64) -> AppResult<c
         Ok(data) => {
             let results: Vec<completion::ItemResult> = serde_json::from_value(data.get("items").cloned().unwrap_or_default())?;
             let o = completion::apply_results(&conn, id, &dest, &items, &results, &a)?;
-            tracing::info!(ticket = id, done = o.done, failed = o.failed.len(), "mark done finished");
+            crate::diag::record(&conn, if o.failed.is_empty() { crate::diag::Severity::Info } else { crate::diag::Severity::Warning }, "outlook-action", if o.failed.is_empty() { "ARCHIVE_OK" } else { "ARCHIVE_PARTIAL" },
+                &format!("Outlook archive for {}: {} flagged, {} moved, {} failed", tickets::display_id(id), o.flagged, o.moved, o.failed.len()), "", &tickets::display_id(id));
             Ok(o)
         }
         Err(e) => {
             completion::record_failure(&conn, id, &items, &e.to_string(), &a)?;
+            crate::diag::record(&conn, crate::diag::Severity::Error, "outlook-action", e.code(), &format!("Outlook archive for {} failed: {e}", tickets::display_id(id)), "", &tickets::display_id(id));
             Err(e)
         }
     }
@@ -869,6 +986,9 @@ async fn finish_assignment(state: &AppState, ticket_id: i64, op_id: i64) -> Assi
 /// Assign one or several tickets to one staff member. Each ticket is handled (and reported) independently.
 #[tauri::command]
 pub async fn tickets_assign(app: AppHandle, state: State<'_, AppState>, ticket_ids: Vec<i64>, staff_id: i64, note: Option<String>) -> AppResult<Vec<AssignOutcome>> {
+    if shared_bound(&state) {
+        return Err(AppError::coded("SHARED_ASSIGN_NOT_YET", "With the shared database, use Claim / Take over for now. Assign/Reassign with Outlook moves and handoff emails needs the shared reservation of moves (next phase), so two computers can never move or notify twice."));
+    }
     let note = note.unwrap_or_default();
     let mut out = Vec::new();
     for id in ticket_ids {
@@ -923,7 +1043,9 @@ pub async fn notification_resend(state: State<'_, AppState>, op_id: i64) -> AppR
 #[tauri::command]
 pub async fn ticket_start_work(state: State<'_, AppState>, id: i64) -> AppResult<tickets::Ticket> {
     let a = actor(&state);
-    tickets::start_work(&state.db.lock().unwrap(), id, &a)
+    let t = crate::workflow::start_work(&state.db.lock().unwrap(), id, &a)?;
+    sync::nudge_shared(&state);
+    Ok(t)
 }
 
 // ------------------------------------------------------------------ scope status / overview

@@ -1,15 +1,16 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { api, debounce, errMsg, fmtDate, HISTORY_REASONS, localDayStart, reasonLabel, statusText, SYNC_LABEL, type ListQuery, type ScopeStatus, type Staff, type TicketSummary } from "../lib/api";
-  import { app, issueName, toast } from "../lib/stores.svelte";
+  import { api, debounce, errMsg, fmtDate, HISTORY_REASONS, localDayStart, reasonLabel, statusBadge, statusText, SYNC_LABEL, type ListQuery, type ScopeStatus, type Staff, type TicketSummary } from "../lib/api";
+  import { app, issueName, sharedLabel, toast } from "../lib/stores.svelte";
   import TicketDetail from "../components/TicketDetail.svelte";
   import NewTicketDialog from "../components/NewTicketDialog.svelte";
   import AssignDialog from "../components/AssignDialog.svelte";
 
-  type View = "current" | "unverified" | "history";
+  /** team views use the shared case records (any folder); the folder views use this computer's Outlook scope */
+  type View = "team" | "mine" | "unassigned" | "current" | "unverified" | "history";
   const PAGE = 100;
   const blank = { search: "", status: "", assignee: "", issue: "", recFrom: "", recTo: "", compFrom: "", compTo: "", asgFrom: "", asgTo: "", age: 0, reason: "", school: "", sender: "", sort: "received", sync: "" };
-  let view = $state<View>("current");
+  let view = $state<View>("team");
   let f = $state({ ...blank });
   let rows = $state<TicketSummary[]>([]);
   let total = $state(0);
@@ -32,8 +33,11 @@
   });
 
   function query(offset: number): ListQuery {
+    const team = view === "team" || view === "mine" || view === "unassigned";
     return {
-      view, status: f.status, assignee: f.assignee, search: f.search, issue_type: f.issue, sort: f.sort, limit: PAGE, offset, sync: f.sync,
+      view: team ? "team" : view,
+      status: view === "mine" ? (f.status || "open") : view === "unassigned" ? "Unassigned" : f.status,
+      assignee: view === "mine" ? String(me ?? -1) : f.assignee, search: f.search, issue_type: f.issue, sort: f.sort, limit: PAGE, offset, sync: f.sync,
       reason: view === "history" ? f.reason : "", school: f.school, sender: f.sender, min_age_days: Number(f.age) || 0,
       // local midnight of the start date .. local midnight after the end date: end dates are inclusive
       received_from: f.recFrom ? localDayStart(f.recFrom) : "", received_to: f.recTo ? localDayStart(f.recTo, 1) : "",
@@ -67,8 +71,8 @@
   const filtered = $derived(JSON.stringify(f) !== JSON.stringify(blank));
   function clearFilters() { f = { ...blank }; }
   function shortcut(kind: "mine" | "unassigned") {
-    f = { ...blank, assignee: kind === "mine" ? String(me ?? "") : "none", status: kind === "mine" ? "open" : "" };
-    view = "current";
+    f = { ...blank };
+    view = kind;
   }
   function toggle(id: number, on: boolean) {
     checked = on ? [...new Set([...checked, id])] : checked.filter((x) => x !== id);
@@ -93,8 +97,9 @@
     selected = id;
   }
 
-  const views: [View, string][] = [["current", "Current Tickets"], ["unverified", "Awaiting Verification"], ["history", "Ticket History"]];
-  const countOf = (v: View) => (scope ? (v === "current" ? scope.current : v === "history" ? scope.history : scope.unverified) : 0);
+  const views: [View, string][] = [["team", "Team Tickets"], ["mine", "My Tickets"], ["unassigned", "Unassigned"], ["current", "Current Tickets"], ["unverified", "Awaiting Location Check"], ["history", "Ticket History"]];
+  const countOf = (v: View) => (scope ? (v === "current" ? scope.current : v === "history" ? scope.history : v === "unverified" ? scope.unverified : -1) : 0);
+  const sharedTag = $derived(sharedLabel(app.shared));
 </script>
 
 <div class="ws">
@@ -102,12 +107,15 @@
     <div class="tabs">
       {#each views as [v, label]}
         {#if v !== "unverified" || countOf(v) > 0 || view === v}
-          <button class="tab" class:on={view === v} onclick={() => { view = v; checked = []; }}>{label} <span class="muted">({countOf(v)})</span></button>
+          <button class="tab" class:on={view === v} disabled={v === "mine" && me == null} title={v === "mine" && me == null ? "Choose who you are in Settings › Staff Assignment" : ""} onclick={() => { view = v; checked = []; }}>{label}{#if countOf(v) >= 0} <span class="muted">({countOf(v)})</span>{/if}</button>
         {/if}
       {/each}
     </div>
     <div class="scopebar small">
-      {#if scope}
+      {#if view === "team" || view === "mine" || view === "unassigned"}
+        <div><b>Shared team cases</b> (any Outlook folder) · <span class="badge {sharedTag.kind}">{sharedTag.text}</span></div>
+        <div class="muted">Shared data refreshed: {app.shared?.last_success_at ? fmtDate(app.shared.last_success_at) : "not yet"}{app.shared?.mode === "standalone" ? " · Standalone: only this computer's cases" : ""}. Your folder scan is shown under Current Tickets and is not complete team coverage.</div>
+      {:else if scope}
         <div><b>{scope.mailbox}</b> · {scope.summary}</div>
         <div>
           {#if scope.running}<span class="badge">Checking Outlook…</span>
@@ -125,8 +133,6 @@
         <button class="primary" onclick={() => (showNew = true)} title="Create a ticket manually">+ New</button>
       </div>
       <div class="row small">
-        <button class="link small" onclick={() => shortcut("mine")} disabled={me == null} title={me == null ? "Choose who you are in Settings › Staff Assignment" : ""}>My Tickets</button>
-        <button class="link small" onclick={() => shortcut("unassigned")}>Unassigned</button>
         <span class="grow"></span>
         <button class="link small" onclick={() => (more = !more)}>{more ? "Fewer filters" : "More filters"}</button>
         <button class="link small" disabled={!filtered} onclick={clearFilters}>Clear Filters</button>
@@ -134,7 +140,7 @@
       <div class="row">
         <select bind:value={f.status} title="Workflow status">
           <option value="">All statuses</option><option value="open">Open (not Done)</option>
-          <option>Unassigned</option><option>Assigned</option><option>In Progress</option><option>Done</option>
+          <option>Unassigned</option><option>Assigned</option><option>In Progress</option><option>Review</option><option>Done</option>
         </select>
         <select bind:value={f.assignee} title="Assignee">
           <option value="">Anyone</option><option value="none">No assignee</option>
@@ -178,9 +184,9 @@
         </div>
       {/if}
       <div class="row small">
-        <span class="muted"><b>{total}</b> {view === "current" ? "current" : view === "history" ? "historical" : "unverified"} ticket{total === 1 ? "" : "s"}{loading ? " · loading…" : ""}</span>
+        <span class="muted"><b>{total}</b> {view === "current" ? "current" : view === "history" ? "historical" : view === "unverified" ? "unverified" : view === "mine" ? "open (mine)" : view === "unassigned" ? "unassigned" : "team"} case{total === 1 ? "" : "s"}{loading ? " · loading…" : ""}</span>
         <span class="grow"></span>
-        {#if checked.length}
+        {#if checked.length && !(app.shared?.mode === "shared" && app.shared?.bound_database_id)}
           <button class="small primary" onclick={() => (assignIds = [...checked])}>Assign selected ({checked.length})</button>
           <button class="link small" onclick={() => (checked = [])}>Clear</button>
         {/if}
@@ -193,7 +199,8 @@
           <button class="body" onclick={() => (selected = t.id)}>
             <div class="row">
               <b>{t.display_id}</b>
-              <span class="badge {t.status === 'Done' ? 'grey' : t.status === 'Unassigned' ? 'warn' : 'ok'}">{statusText(t.status, t.assignee_name)}</span>
+              <span class="badge {statusBadge(t.status)}">{statusText(t.status, t.assignee_name)}</span>
+              {#if t.new_reply}<span class="badge warn" title="A new incoming email arrived after the last staff action">new reply</span>{/if}
               {#if t.ownership_conflict}<span class="badge err" title="Emails are in more than one staff folder">owner conflict</span>{/if}
               {#if t.low_confidence}<span class="badge warn" title="Issue type guessed with low confidence">check type</span>{/if}
               {#if t.possible_duplicate_of}<span class="badge warn" title="Possible duplicate">dup?</span>{/if}
@@ -208,6 +215,8 @@
             <div class="muted small ellipsis">{issueName(t.issue_type)}{(t.issue_count ?? 0) > 1 ? ` +${(t.issue_count ?? 1) - 1} more` : ""}</div>
             <div class="muted small ellipsis">{t.original_subject ?? ""}</div>
             {#if view === "history" && t.scope_reason}<div class="small reason">{reasonLabel(t.scope_reason)}</div>{/if}
+            {#if t.status === "Review" && t.review_reason}<div class="small reason">Review: {t.review_reason}</div>{/if}
+            <div class="muted small">{t.ticket_ref ?? ""} · updated {fmtDate(t.updated_at)}</div>
           </button>
         </div>
       {:else}
@@ -221,7 +230,7 @@
   <div class="split" role="separator" aria-orientation="vertical" onpointerdown={startDrag}></div>
   <section class="center scroll">
     {#if selected}
-      <TicketDetail id={selected} onchanged={() => load()} onassign={(ids) => (assignIds = ids)} />
+      <TicketDetail id={selected} onchanged={() => load()} onassign={(ids) => (assignIds = ids)} onopen={(nid) => (selected = nid)} />
     {:else}
       <div class="empty muted">
         Select a ticket.<br />
