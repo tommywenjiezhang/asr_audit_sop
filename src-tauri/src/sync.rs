@@ -322,6 +322,8 @@ pub fn spawn_shared_scheduler(app: AppHandle) {
                 if let Err(e) = shared_run(&app, "schedule", true).await {
                     tracing::debug!(error = %e, "shared sync skipped");
                 }
+                // Done decisions made here that are now confirmed: flag and move their emails
+                crate::commands::archive_pending(&state).await;
             }
         }
     });

@@ -11,6 +11,7 @@ use crate::sync::{self, SyncOutcome, SyncStatus};
 use crate::templates_store::{self as ts, TemplateRow, TemplateVersion};
 use crate::tickets::{self, ListQuery, ListResult, NewTicket, TicketDetail, TicketField, TicketPatch};
 use crate::AppState;
+use rusqlite::OptionalExtension;
 use serde::Serialize;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -327,14 +328,36 @@ fn shared_bound(state: &AppState) -> bool {
 /// shared database, Outlook archiving is a separate step after the shared database accepted the decision;
 /// on a standalone computer it runs right away. An Outlook failure never undoes the Done decision.
 #[tauri::command]
-pub async fn ticket_complete(state: State<'_, AppState>, id: i64) -> AppResult<MarkDoneResult> {
+pub async fn ticket_complete(app: AppHandle, state: State<'_, AppState>, id: i64) -> AppResult<MarkDoneResult> {
     let _guard = busy(&state.completing, id)?;
     let a = actor(&state);
     let r = crate::workflow::mark_done(&state.db.lock().unwrap(), id, &a);
     let decision = op_failed(&state, "Mark Done", id, r)?;
     sync::nudge_shared(&state);
     if shared_bound(&state) {
-        return Ok(MarkDoneResult { decision, outlook: None, outlook_message: "Outlook was not changed yet. After the shared database confirms the Done decision, use Archive in Outlook to flag and move the covered emails.".into() });
+        if settings(&state).archive_folder.is_none() {
+            return Ok(MarkDoneResult { decision, outlook: None, outlook_message: "Done saved. Outlook was not changed: no completion folder is configured (Settings › Completion Folder).".into() });
+        }
+        // the Outlook step waits for the shared database to accept the decision (never for a stale one);
+        // it is remembered so it also runs later if the shared database is unreachable right now
+        pending_archive_set(&state, id, true);
+        let _ = tokio::time::timeout(Duration::from_secs(60), sync::shared_run(&app, "mark-done", true)).await;
+        if !done_confirmed(&state, id) {
+            return Ok(MarkDoneResult {
+                decision,
+                outlook: None,
+                outlook_message: "Done saved. The shared database has not confirmed it yet; the covered emails are flagged and moved to the Completed folder automatically once it does (or use Archive in Outlook).".into(),
+            });
+        }
+        return Ok(match archive_shared(&state, id).await {
+            Ok(o) if o.done => {
+                pending_archive_set(&state, id, false);
+                let msg = if o.dest_path.is_empty() { "No Outlook emails to archive.".to_string() } else { format!("Outlook updated: {} email(s) flagged complete and moved to {}.", o.moved, o.dest_path) };
+                MarkDoneResult { decision, outlook: Some(o), outlook_message: msg }
+            }
+            Ok(o) => MarkDoneResult { decision, outlook: Some(o), outlook_message: "The case is Done, but some Outlook steps failed. Use Retry Outlook update.".into() },
+            Err(e) => MarkDoneResult { decision, outlook: None, outlook_message: format!("The case is Done, but Outlook was not updated: {e} Use Archive in Outlook to retry.") },
+        });
     }
     if settings(&state).archive_folder.is_none() {
         return Ok(MarkDoneResult { decision, outlook: None, outlook_message: "Outlook was not changed: no completion folder is configured (Settings › Completion Folder).".into() });
@@ -365,7 +388,103 @@ pub async fn ticket_archive_outlook(state: State<'_, AppState>, id: i64) -> AppR
             }
         }
     }
-    run_archive(&state, id).await
+    let o = if shared_bound(&state) { archive_shared(&state, id).await? } else { run_archive(&state, id).await? };
+    if o.done {
+        pending_archive_set(&state, id, false);
+    }
+    Ok(o)
+}
+
+/// The latest Done decision of the case is accepted by the shared database and nothing is unsent.
+fn done_confirmed(state: &AppState, id: i64) -> bool {
+    let conn = state.db.lock().unwrap();
+    let Ok(t) = tickets::get(&conn, id) else { return false };
+    let st: Option<String> = conn.query_row("SELECT state FROM completion_history WHERE ticket_id=?1 ORDER BY decided_at DESC, id DESC LIMIT 1", [id], |r| r.get(0)).ok();
+    t.status == tickets::DONE && matches!(st.as_deref(), Some("accepted") | Some("legacy")) && t.sync_state == "synced"
+}
+
+/// Cases whose Outlook archiving waits for the shared database's confirmation (this computer's decisions).
+fn pending_archive_list(conn: &rusqlite::Connection) -> Vec<(i64, i64)> {
+    crate::db::get_setting(conn, "pending_archive").ok().flatten().and_then(|v| serde_json::from_str::<Vec<(i64, i64)>>(&v).ok()).unwrap_or_default()
+}
+
+fn pending_archive_set(state: &AppState, id: i64, on: bool) {
+    let conn = state.db.lock().unwrap();
+    let mut list = pending_archive_list(&conn);
+    list.retain(|(t, _)| *t != id);
+    if on {
+        list.push((id, 0));
+    }
+    let _ = crate::db::set_setting(&conn, "pending_archive", &serde_json::to_string(&list).unwrap_or_default());
+}
+
+/// Run waiting Outlook archiving after a synchronization (called by the scheduler). A case that is no
+/// longer Done, or whose decision was superseded by a newer reply, is dropped from the list untouched.
+pub async fn archive_pending(state: &AppState) {
+    let list = pending_archive_list(&state.db.lock().unwrap());
+    if list.is_empty() || settings(state).archive_folder.is_none() {
+        return;
+    }
+    for (id, attempts) in list {
+        let status = tickets::get(&state.db.lock().unwrap(), id).map(|t| t.status).unwrap_or_default();
+        if status != tickets::DONE {
+            pending_archive_set(state, id, false);
+            continue;
+        }
+        if !done_confirmed(state, id) {
+            continue;
+        }
+        let Ok(_g) = busy(&state.completing, id) else { continue };
+        match archive_shared(state, id).await {
+            Ok(o) if o.done => pending_archive_set(state, id, false),
+            r => {
+                let conn = state.db.lock().unwrap();
+                let mut list = pending_archive_list(&conn);
+                list.retain(|(t, _)| *t != id);
+                if attempts + 1 < 5 {
+                    list.push((id, attempts + 1));
+                } else {
+                    crate::diag::record(&conn, crate::diag::Severity::Error, "outlook-action", "ARCHIVE_GAVE_UP", &format!("Automatic Outlook archiving for {} stopped after 5 attempts; use Archive in Outlook", tickets::display_id(id)), &r.err().map(|e| e.to_string()).unwrap_or_default(), &tickets::display_id(id));
+                }
+                let _ = crate::db::set_setting(&conn, "pending_archive", &serde_json::to_string(&list).unwrap_or_default());
+            }
+        }
+    }
+}
+
+/// Archive with the shared reservation: only one computer flags and moves a case's emails at a time.
+async fn archive_shared(state: &AppState, id: i64) -> AppResult<completion::Outcome> {
+    let Some(o) = online(state)? else { return run_archive(state, id).await };
+    let items = completion::pending(&state.db.lock().unwrap(), id)?;
+    if items.is_empty() {
+        return Ok(completion::Outcome { done: true, flagged: 0, moved: 0, failed: vec![], dest_path: String::new() });
+    }
+    let tsid = ticket_shared_id(state, id)?;
+    let emails = email_shared_ids(&state.db.lock().unwrap(), &items.iter().map(|i| i.message_id).collect::<Vec<_>>());
+    let r = apply_online(&o, "outlook.reserve", &tsid, serde_json::json!({}), serde_json::json!({"kind": "archive", "email_ids": emails})).await?;
+    if r.result != "accepted" {
+        let code = if r.extra.get("busy").and_then(|v| v.as_bool()).unwrap_or(false) { "BUSY_ELSEWHERE" } else { "NOT_CONFIRMED" };
+        return Err(AppError::coded(code, r.message));
+    }
+    let oid = r.extra.get("outlook_op_id").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+    let res = run_archive(state, id).await;
+    let (state_s, err) = match &res {
+        Ok(out) if out.done => ("moved", None),
+        Ok(out) => ("failed", out.failed.first().map(|f| f.error.clone())),
+        Err(e) => ("failed", Some(e.to_string())),
+    };
+    let moved: Vec<String> = {
+        let conn = state.db.lock().unwrap();
+        let ids: Vec<i64> = conn
+            .prepare("SELECT message_id FROM message_completion WHERE ticket_id=?1 AND moved_at IS NOT NULL")
+            .and_then(|mut st| st.query_map([id], |r| r.get(0))?.collect())
+            .unwrap_or_default();
+        email_shared_ids(&conn, &ids)
+    };
+    report_online(state, &o, "outlook.progress", &tsid, serde_json::json!({"outlook_op_id": oid, "state": state_s, "moved_ids": moved, "error": err})).await;
+    report_online(state, &o, "outlook.finish", &tsid, serde_json::json!({"outlook_op_id": oid, "state": if state_s == "moved" { "done" } else { "failed" }, "error": err})).await;
+    sync::nudge_shared(state);
+    res
 }
 
 async fn run_archive(state: &AppState, id: i64) -> AppResult<completion::Outcome> {
@@ -830,6 +949,83 @@ pub async fn outlook_list_accounts(state: State<'_, AppState>) -> AppResult<serd
     sync::call_with_retry(&cfg, "list_accounts", serde_json::json!({}), Duration::from_secs(60), 1).await
 }
 
+// ------------------------------------------------------------------ shared coordination of Outlook side effects
+
+/// What an online (never queued) shared operation needs: the bound database and who is acting.
+struct Online {
+    path: PathBuf,
+    db: String,
+    dev: crate::shared_store::DeviceInfo,
+    staff_shared: Option<String>,
+    staff_name: String,
+}
+
+/// Some(..) when this computer works with a bound shared database (Outlook steps must be coordinated).
+fn online(state: &AppState) -> AppResult<Option<Online>> {
+    let s = settings(state);
+    let conn = state.db.lock().unwrap();
+    if crate::sync_queue::mode(&conn) != crate::sync_queue::MODE_SHARED {
+        return Ok(None);
+    }
+    let Some(db) = crate::sync_queue::bound_db(&conn) else { return Ok(None) };
+    let a = crate::sync_queue::actor(&conn, &s.staff_name);
+    Ok(Some(Online { path: PathBuf::from(s.shared_db_path.trim()), db, dev: crate::sync_queue::device_info(&conn, &state.app_version)?, staff_shared: a.staff_shared_id, staff_name: a.name }))
+}
+
+/// Apply one `outlook.*` operation directly in the shared database (blocking work off the UI thread,
+/// with a time limit). Nothing is queued: an Outlook step only runs after this returns "accepted".
+async fn apply_online(o: &Online, op_type: &str, ticket_shared: &str, original: serde_json::Value, proposed: serde_json::Value) -> AppResult<crate::shared_apply::OpResult> {
+    let op = crate::shared_outlook::new_op(op_type, ticket_shared, &o.dev, o.staff_shared.clone(), &o.staff_name, original, proposed);
+    let (path, db) = (o.path.clone(), o.db.clone());
+    let task = tauri::async_runtime::spawn_blocking(move || -> crate::shared_store::SResult<crate::shared_apply::OpResult> {
+        let mut c = crate::shared_store::open(&path, false)?;
+        crate::shared_outlook::apply_online(c.as_mut(), &db, &op)
+    });
+    match tokio::time::timeout(Duration::from_secs(90), task).await {
+        Ok(Ok(Ok(r))) => Ok(r),
+        Ok(Ok(Err(e))) => Err(AppError::coded(
+            "SHARED_UNAVAILABLE",
+            format!("The shared database could not coordinate this Outlook step: {} ({}). Nothing was moved or sent; try again when the shared database is reachable.", e.kind.plain(), e.code()),
+        )),
+        Ok(Err(e)) => Err(AppError::msg(e.to_string())),
+        Err(_) => Err(AppError::coded("SHARED_TIMEOUT", "The shared database did not answer within 90 seconds. Nothing was moved or sent.")),
+    }
+}
+
+/// Best-effort report to the shared database (the local record is authoritative for this computer's
+/// retries; a missed report only delays what colleagues see, and leases expire on their own).
+async fn report_online(state: &AppState, o: &Online, op_type: &str, ticket_shared: &str, proposed: serde_json::Value) -> Option<crate::shared_apply::OpResult> {
+    match apply_online(o, op_type, ticket_shared, serde_json::json!({}), proposed).await {
+        Ok(r) => Some(r),
+        Err(e) => {
+            if let Ok(conn) = state.db.lock() {
+                crate::diag::record(&conn, crate::diag::Severity::Warning, "outlook-action", e.code(), &format!("Could not report {op_type} to the shared database: {e}"), "", ticket_shared);
+            }
+            None
+        }
+    }
+}
+
+fn ticket_shared_id(state: &AppState, tid: i64) -> AppResult<String> {
+    let conn = state.db.lock().unwrap();
+    if crate::sync_queue::ticket_shared_state(&conn, tid)? != "shared" {
+        return Err(AppError::coded("NOT_SYNCED", format!("{} is not in the shared database yet. Sync first (Settings › Shared Database › Sync Now); Outlook steps are coordinated through the shared database.", tickets::display_id(tid))));
+    }
+    crate::sync_queue::ensure_shared_id(&conn, tid)
+}
+
+fn email_shared_ids(conn: &rusqlite::Connection, ids: &[i64]) -> Vec<String> {
+    ids.iter().filter_map(|m| conn.query_row("SELECT shared_email_id FROM email_messages WHERE id=?1", [m], |r| r.get::<_, Option<String>>(0)).ok().flatten()).collect()
+}
+
+fn assignment_shared_op(state: &AppState, op_id: i64) -> Option<(String, i64)> {
+    let row: Option<(Option<String>, i64)> = state.db.lock().ok()?.query_row("SELECT shared_op_id, ticket_id FROM assignment_ops WHERE id=?1", [op_id], |r| Ok((r.get(0)?, r.get(1)?))).ok();
+    match row {
+        Some((Some(s), t)) => Some((s, t)),
+        _ => None,
+    }
+}
+
 // ------------------------------------------------------------------ assignment
 
 #[tauri::command]
@@ -898,11 +1094,40 @@ async fn run_moves(state: &AppState, op_id: i64) -> AppResult<(bool, Vec<crate::
 /// Send the handoff notification of a finished assignment (claimed atomically: never twice).
 async fn send_notice(state: &AppState, op_id: i64) -> AppResult<(String, Option<String>)> {
     use crate::assignment::{self as a, NotifyOutcome};
-    let n = {
+    // with a shared database, the handoff is claimed there first: two computers can never both send it
+    let shared: Option<(Online, String, String)> = match (online(state)?, assignment_shared_op(state, op_id)) {
+        (Some(o), Some((sop, tid))) => Some((o, ticket_shared_id(state, tid)?, sop)),
+        _ => None,
+    };
+    {
         let conn = state.db.lock().unwrap();
         a::claim_notification(&conn, op_id)?;
-        a::build_notification(&conn, op_id)?
-    };
+    }
+    if let Some((o, tsid, sop)) = &shared {
+        let r = match apply_online(o, "outlook.notify_claim", tsid, serde_json::json!({}), serde_json::json!({"outlook_op_id": sop})).await {
+            Ok(r) => r,
+            Err(e) => {
+                // not claimed: certainly not sent from here; the local claim is undone so Retry works
+                state.db.lock().unwrap().execute("UPDATE assignment_ops SET notify_state='failed', notify_error=?2 WHERE id=?1 AND notify_state='sending'", rusqlite::params![op_id, e.to_string()])?;
+                return Err(e);
+            }
+        };
+        if r.result != "accepted" {
+            let st = r.extra.get("notify_state").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let conn = state.db.lock().unwrap();
+            // mirror what the shared record says (submitted / uncertain elsewhere): never send again from here
+            let local = match st.as_str() {
+                "submitted" => "submitted",
+                "uncertain" => "uncertain",
+                "skipped" => "skipped",
+                _ => "failed",
+            };
+            conn.execute("UPDATE assignment_ops SET notify_state=?2, notify_error=?3 WHERE id=?1", rusqlite::params![op_id, local, r.message])?;
+            tickets::history(&conn, a::get_op(&conn, op_id)?.ticket_id, "system", "Handoff not sent from this computer", Some("notification"), None, Some(&r.message))?;
+            return Ok((local.to_string(), Some(r.message)));
+        }
+    }
+    let n = a::build_notification(&state.db.lock().unwrap(), op_id)?;
     let account = settings(state).notify_account;
     let params = serde_json::json!({"to": n.to, "subject": n.subject, "html_body": n.html_body, "account": account, "notification_id": n.notification_id});
     let outcome = match sync::worker_config(state) {
@@ -922,15 +1147,22 @@ async fn send_notice(state: &AppState, op_id: i64) -> AppResult<(String, Option<
             Err(e) => NotifyOutcome::Uncertain(format!("{e} The notification may or may not have been sent.")),
         },
     };
-    let conn = state.db.lock().unwrap();
-    let (sev, code) = match &outcome {
-        NotifyOutcome::Submitted { .. } => (crate::diag::Severity::Info, "HANDOFF_SUBMITTED"),
-        NotifyOutcome::Uncertain(_) => (crate::diag::Severity::Warning, "HANDOFF_UNCERTAIN"),
-        NotifyOutcome::Failed(_) => (crate::diag::Severity::Error, "HANDOFF_FAILED"),
+    let op = {
+        let conn = state.db.lock().unwrap();
+        let (sev, code) = match &outcome {
+            NotifyOutcome::Submitted { .. } => (crate::diag::Severity::Info, "HANDOFF_SUBMITTED"),
+            NotifyOutcome::Uncertain(_) => (crate::diag::Severity::Warning, "HANDOFF_UNCERTAIN"),
+            NotifyOutcome::Failed(_) => (crate::diag::Severity::Error, "HANDOFF_FAILED"),
+        };
+        a::record_notification(&conn, op_id, outcome)?;
+        let op = a::get_op(&conn, op_id)?;
+        crate::diag::record(&conn, sev, "outlook-action", code, &format!("Handoff notification for {}: {}", tickets::display_id(op.ticket_id), op.notify_state), op.notify_error.as_deref().unwrap_or(""), &format!("assignment op {op_id}"));
+        op
     };
-    a::record_notification(&conn, op_id, outcome)?;
-    let op = a::get_op(&conn, op_id)?;
-    crate::diag::record(&conn, sev, "outlook-action", code, &format!("Handoff notification for {}: {}", tickets::display_id(op.ticket_id), op.notify_state), op.notify_error.as_deref().unwrap_or(""), &format!("assignment op {op_id}"));
+    if let Some((o, tsid, sop)) = &shared {
+        report_online(state, o, "outlook.notify_result", tsid, serde_json::json!({"outlook_op_id": sop, "state": op.notify_state, "error": op.notify_error, "to": op.notify_recipient})).await;
+        sync::nudge_shared(state);
+    }
     Ok((op.notify_state, op.notify_error))
 }
 
@@ -941,13 +1173,110 @@ async fn run_assignment(state: &AppState, ticket_id: i64, staff_id: i64, note: &
         Err(e) => return outcome(ticket_id, "busy", e.to_string()),
     };
     let operator = actor(state);
-    let begin = a::begin(&state.db.lock().unwrap(), ticket_id, staff_id, &operator, note);
-    let op_id = match begin {
+    let o = match online(state) {
+        Ok(o) => o,
         Err(e) => return outcome(ticket_id, "blocked", e.to_string()),
-        Ok(Begin::NoChange) => return outcome(ticket_id, "no_change", "Already assigned to this person and the emails are already in their folder. No notification sent."),
+    };
+    let Some(o) = o else {
+        // standalone computer: no coordination needed
+        let begin = a::begin(&state.db.lock().unwrap(), ticket_id, staff_id, &operator, note);
+        let op_id = match begin {
+            Err(e) => return outcome(ticket_id, "blocked", e.to_string()),
+            Ok(Begin::NoChange) => return outcome(ticket_id, "no_change", "Already assigned to this person and the emails are already in their folder. No notification sent."),
+            Ok(Begin::Op(op)) => op,
+        };
+        return finish_assignment(state, ticket_id, op_id).await;
+    };
+    // shared database: reserve the case's Outlook moves and change the owner in ONE shared transaction
+    let pre = (|| -> AppResult<(String, Option<String>, Vec<String>, Option<String>)> {
+        let conn = state.db.lock().unwrap();
+        let t = tickets::get(&conn, ticket_id)?;
+        if t.status == tickets::DONE {
+            return Err(AppError::coded("TICKET_DONE", format!("{} is Done. Reopen it before assigning it.", t.display_id)));
+        }
+        let to = crate::staff::assignable(&conn, staff_id)?;
+        let to_shared = to.shared_id.clone().ok_or_else(|| AppError::coded("NOT_SYNCED", format!("{} is not in the shared database yet. Sync first.", to.display_name)))?;
+        let seen: Option<String> = match t.assignee_staff_id {
+            Some(s) => conn.query_row("SELECT shared_id FROM staff WHERE id=?1", [s], |r| r.get(0))?,
+            None => None,
+        };
+        let src: Vec<i64> = a::source_messages(&conn, ticket_id)?.into_iter().map(|m| m.message_id).collect();
+        // an unfinished run of this computer to the same person is resumed with the same reservation
+        let resume: Option<String> = conn
+            .query_row(
+                "SELECT shared_op_id FROM assignment_ops WHERE ticket_id=?1 AND to_staff_id=?2 AND state IN ('moving','failed') AND shared_op_id IS NOT NULL ORDER BY id DESC LIMIT 1",
+                rusqlite::params![ticket_id, staff_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok((to_shared, seen, email_shared_ids(&conn, &src), resume))
+    })();
+    let (to_shared, seen, emails, resume) = match pre {
+        Ok(v) => v,
+        Err(e) => return outcome(ticket_id, "blocked", e.to_string()),
+    };
+    let tsid = match ticket_shared_id(state, ticket_id) {
+        Ok(t) => t,
+        Err(e) => return outcome(ticket_id, "blocked", e.to_string()),
+    };
+    let oid = resume.unwrap_or_else(crate::shared_apply::new_id);
+    let r = match apply_online(&o, "outlook.reserve", &tsid, serde_json::json!({"owner_staff_id": seen}), serde_json::json!({"outlook_op_id": oid, "kind": "assign", "to_staff_id": to_shared, "email_ids": emails, "note": note})).await {
+        Ok(r) => r,
+        Err(e) => return outcome(ticket_id, "offline", e.to_string()),
+    };
+    if r.result != "accepted" {
+        let busy = r.extra.get("busy").and_then(|v| v.as_bool()).unwrap_or(false);
+        sync::nudge_shared(state);
+        return outcome(ticket_id, if busy { "busy" } else { "blocked" }, r.message);
+    }
+    let oid = r.extra.get("outlook_op_id").and_then(|v| v.as_str()).unwrap_or(&oid).to_string();
+    let from_shared = r.extra.get("from_staff_id").and_then(|v| v.as_str()).map(String::from);
+    let begin = {
+        let conn = state.db.lock().unwrap();
+        let b = a::begin(&conn, ticket_id, staff_id, &operator, note);
+        if let Ok(Begin::Op(op)) = &b {
+            // the shared answer decides the previous owner (and so whether a handoff is due)
+            let from_local: Option<i64> = match &from_shared {
+                Some(f) => conn.query_row("SELECT id FROM staff WHERE shared_id=?1", [f], |r| r.get(0)).optional().ok().flatten(),
+                None => None,
+            };
+            let _ = conn.execute("UPDATE assignment_ops SET shared_op_id=?2, from_staff_id=?3 WHERE id=?1", rusqlite::params![op, oid, from_local]);
+        }
+        b
+    };
+    let op_id = match begin {
+        Err(e) => {
+            report_online(state, &o, "outlook.finish", &tsid, serde_json::json!({"outlook_op_id": oid, "state": "released", "error": e.to_string()})).await;
+            return outcome(ticket_id, "blocked", e.to_string());
+        }
+        Ok(Begin::NoChange) => {
+            report_online(state, &o, "outlook.finish", &tsid, serde_json::json!({"outlook_op_id": oid, "state": "done"})).await;
+            sync::nudge_shared(state);
+            return outcome(ticket_id, "no_change", "Already assigned to this person and the emails are already in their folder. No notification sent.");
+        }
         Ok(Begin::Op(op)) => op,
     };
     finish_assignment(state, ticket_id, op_id).await
+}
+
+/// Report the moves of a shared-coordinated assignment (moved emails, finished / failed).
+async fn report_moves(state: &AppState, op_id: i64, finished: bool, error: Option<String>) {
+    let Ok(Some(o)) = online(state) else { return };
+    let Some((sop, tid)) = assignment_shared_op(state, op_id) else { return };
+    let Ok(tsid) = ticket_shared_id(state, tid) else { return };
+    let moved: Vec<String> = {
+        let conn = state.db.lock().unwrap();
+        let ids: Vec<i64> = conn
+            .prepare("SELECT message_id FROM assignment_moves WHERE op_id=?1 AND moved_at IS NOT NULL")
+            .and_then(|mut st| st.query_map([op_id], |r| r.get(0))?.collect())
+            .unwrap_or_default();
+        email_shared_ids(&conn, &ids)
+    };
+    report_online(state, &o, "outlook.progress", &tsid, serde_json::json!({"outlook_op_id": sop, "state": if finished { "moved" } else { "failed" }, "moved_ids": moved, "error": error})).await;
+    if finished {
+        report_online(state, &o, "outlook.finish", &tsid, serde_json::json!({"outlook_op_id": sop, "state": "done"})).await;
+    }
+    sync::nudge_shared(state);
 }
 
 async fn finish_assignment(state: &AppState, ticket_id: i64, op_id: i64) -> AssignOutcome {
@@ -955,15 +1284,17 @@ async fn finish_assignment(state: &AppState, ticket_id: i64, op_id: i64) -> Assi
     o.op_id = Some(op_id);
     match run_moves(state, op_id).await {
         Err(e) => {
+            report_moves(state, op_id, false, Some(e.to_string())).await;
             o.message = e.to_string();
             return o;
         }
         Ok((false, failures)) => {
+            report_moves(state, op_id, false, failures.first().map(|f| f.error.clone())).await;
             o.message = "Not all emails could be moved. The assignment is not finished and no notification was sent. Fix the problem and choose Retry.".into();
             o.failures = failures;
             return o;
         }
-        Ok((true, _)) => {}
+        Ok((true, _)) => report_moves(state, op_id, true, None).await,
     }
     o.result = "assigned".into();
     let op = match crate::assignment::get_op(&state.db.lock().unwrap(), op_id) {
@@ -1000,9 +1331,6 @@ async fn finish_assignment(state: &AppState, ticket_id: i64, op_id: i64) -> Assi
 /// Assign one or several tickets to one staff member. Each ticket is handled (and reported) independently.
 #[tauri::command]
 pub async fn tickets_assign(app: AppHandle, state: State<'_, AppState>, ticket_ids: Vec<i64>, staff_id: i64, note: Option<String>) -> AppResult<Vec<AssignOutcome>> {
-    if shared_bound(&state) {
-        return Err(AppError::coded("SHARED_ASSIGN_NOT_YET", "With the shared database, use Claim / Take over for now. Assign/Reassign with Outlook moves and handoff emails needs the shared reservation of moves (next phase), so two computers can never move or notify twice."));
-    }
     let note = note.unwrap_or_default();
     let mut out = Vec::new();
     for id in ticket_ids {
@@ -1042,7 +1370,15 @@ pub async fn notification_check(state: State<'_, AppState>, op_id: i64) -> AppRe
     let found = data.get("found").and_then(|v| v.as_bool()).unwrap_or(false);
     let place = data.get("where").and_then(|v| v.as_str()).map(String::from);
     let entry = data.get("entry_id").and_then(|v| v.as_str()).map(String::from);
-    crate::assignment::record_check(&state.db.lock().unwrap(), op_id, if found { place.as_deref() } else { None }, entry.as_deref())
+    let msg = crate::assignment::record_check(&state.db.lock().unwrap(), op_id, if found { place.as_deref() } else { None }, entry.as_deref())?;
+    if found {
+        if let (Ok(Some(o)), Some((sop, tid))) = (online(&state), assignment_shared_op(&state, op_id)) {
+            if let Ok(tsid) = ticket_shared_id(&state, tid) {
+                report_online(&state, &o, "outlook.notify_result", &tsid, serde_json::json!({"outlook_op_id": sop, "state": "submitted", "to": op.notify_recipient})).await;
+            }
+        }
+    }
+    Ok(msg)
 }
 
 /// Uncertain outcome: staff explicitly confirm to send again.
@@ -1051,6 +1387,14 @@ pub async fn notification_resend(state: State<'_, AppState>, op_id: i64) -> AppR
     let tid = crate::assignment::get_op(&state.db.lock().unwrap(), op_id)?.ticket_id;
     let _g = busy(&state.completing, tid)?;
     crate::assignment::allow_resend(&state.db.lock().unwrap(), op_id, &actor(&state))?;
+    if let (Some(o), Some((sop, _))) = (online(&state)?, assignment_shared_op(&state, op_id)) {
+        let tsid = ticket_shared_id(&state, tid)?;
+        // staff confirmed the resend: the shared record goes back to pending so it can be claimed once
+        let r = apply_online(&o, "outlook.notify_result", &tsid, serde_json::json!({}), serde_json::json!({"outlook_op_id": sop, "state": "pending"})).await?;
+        if r.result != "accepted" {
+            return Err(AppError::coded("NOTIFY_NOT_ALLOWED", r.message));
+        }
+    }
     send_notice(&state, op_id).await
 }
 

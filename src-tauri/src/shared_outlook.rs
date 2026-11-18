@@ -298,6 +298,11 @@ fn notify_claim(tx: &mut WorkflowTx<'_, '_>, tid: &str, res: &mut OpResult) -> S
             tx.touch(tid);
             res.extra = json!({"outlook_op_id": r.outlook_op_id, "notify_state": "sending"});
         }
+        // my own earlier claim whose acknowledgement was lost (this computer's local state shows it did
+        // not send yet, otherwise it would not ask again)
+        "sending" if r.notify_device.as_deref() == Some(tx.op().device_id.as_str()) => {
+            res.extra = json!({"outlook_op_id": r.outlook_op_id, "notify_state": "sending", "reclaimed": true});
+        }
         "submitted" => reject(res, "The handoff email was already submitted to Outlook. It is not sent again.", json!({"notify_state": "submitted"})),
         "uncertain" => reject(res, "The earlier send attempt is uncertain. Check Sent Items before sending again.", json!({"notify_state": "uncertain"})),
         "skipped" => reject(res, "No handoff is needed (the owner did not change).", json!({"notify_state": "skipped"})),
