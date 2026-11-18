@@ -209,7 +209,7 @@ fn reserve(tx: &mut WorkflowTx<'_, '_>, tid: &str, res: &mut OpResult) -> SResul
     let emails = p.get("email_ids").cloned().unwrap_or(json!([]));
     let dev_name = device_name(tx, &op.device_id);
     tx.exec(
-        "INSERT INTO OutlookOperations (outlook_op_id, ticket_id, op_kind, active_key, from_staff_id, to_staff_id, device_id, device_name, staff_id, staff_name, op_state, email_ids, moved_ids, notify_state, notify_id, note, created_at, updated_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'reserved', ?, '[]', ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO OutlookOperations (outlook_op_id, ticket_id, op_kind, active_key, from_staff_id, to_staff_id, device_id, device_name, staff_id, staff_name, op_state, email_ids, moved_ids, notify_state, notify_id, handoff_note, created_at, updated_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'reserved', ?, '[]', ?, ?, ?, ?, ?, ?)",
         &[
             oid.clone().into(), tid.into(), kind.clone().into(), key.into(), from.clone().map(Val::Text).unwrap_or(Val::Null), to_staff.clone().map(Val::Text).unwrap_or(Val::Null),
             op.device_id.clone().into(), sa::cut(&dev_name, 128).into(), op.staff_id.clone().map(Val::Text).unwrap_or(Val::Null), sa::cut(&op.staff_name, 100).into(),
@@ -492,9 +492,12 @@ mod tests {
         // finished: B may now reassign (seeing A as owner)
         let rb = apply_online(c.as_mut(), &db, &new_op("outlook.reserve", &t, &dev("B"), None, "Admin B", json!({"owner_staff_id": a}), json!({"kind": "assign", "to_staff_id": w}))).unwrap();
         assert_eq!(rb.result, "accepted", "{rb:?}");
-        let hist = c.query("SELECT staff_id, ended_at, start_reason FROM OwnershipHistory WHERE ticket_id = ? ORDER BY started_at", &[t.clone().into()]).unwrap();
+        let hist = c.query("SELECT staff_id, ended_at, start_reason FROM OwnershipHistory WHERE ticket_id = ?", &[t.clone().into()]).unwrap();
         assert_eq!(hist.len(), 2, "A's period ended, W's started");
-        assert_eq!(col_s(&hist[1], 2), "reassign");
+        let open: Vec<_> = hist.iter().filter(|r| col(r, 1).is_none()).collect();
+        assert_eq!(open.len(), 1);
+        assert_eq!((col_s(open[0], 0), col_s(open[0], 2)), (w.clone(), "reassign".to_string()));
+        assert!(hist.iter().any(|r| col_s(r, 0) == a && col(r, 1).is_some() && col_s(r, 2) == "assign"));
         let ops = for_tickets(c.as_mut(), &[t.clone()]).unwrap();
         assert_eq!(ops.len(), 2);
         assert!(!ops[0].active && ops[1].active);
