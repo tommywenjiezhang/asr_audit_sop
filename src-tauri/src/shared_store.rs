@@ -379,7 +379,7 @@ mod access {
 
     static ENV: OnceLock<Result<Environment, String>> = OnceLock::new();
 
-    fn env() -> SResult<&'static Environment> {
+    pub(super) fn env() -> SResult<&'static Environment> {
         match ENV.get_or_init(|| Environment::new().map_err(|e| e.to_string())) {
             Ok(e) => Ok(e),
             Err(m) => Err(SharedError::new(ErrKind::DriverMissing, format!("ODBC environment could not be created: {m}"))),
@@ -1043,6 +1043,20 @@ pub mod tests {
         assert_eq!(identity(c.as_mut()).unwrap().maintenance, true, "a failed upgrade leaves the database in maintenance (writers blocked)");
         let n = c.query("SELECT COUNT(*) FROM Staff", &[]).unwrap();
         assert_eq!(col_i(&n[0], 0), 1, "data kept");
+    }
+
+    /// Missing driver through the real ODBC driver manager: a driver name that is not installed gives
+    /// IM002, which must be reported as "driver missing" (not as a network problem).
+    #[test]
+    fn missing_driver_is_reported_as_driver_missing() {
+        let env = access::env().unwrap();
+        let e = env
+            .connect_with_connection_string("Driver={ASR Test Driver That Does Not Exist};DBQ=C:\\x.accdb;", odbc_api::ConnectionOptions::default())
+            .err()
+            .map(access::map_err)
+            .expect("connecting with an unknown driver must fail");
+        assert_eq!(e.kind, ErrKind::DriverMissing, "{e:?}");
+        assert_eq!(e.sqlstate, "IM002");
     }
 
     #[test]

@@ -8,8 +8,9 @@
   import Reports from "./pages/Reports.svelte";
   import Overview from "./pages/Overview.svelte";
   import SettingsPage from "./pages/Settings.svelte";
+  import Diagnostics from "./pages/Diagnostics.svelte";
 
-  type Page = "tickets" | "overview" | "templates" | "reports" | "settings";
+  type Page = "tickets" | "overview" | "templates" | "reports" | "settings" | "diagnostics";
   let page = $state<Page>("tickets");
   let ready = $state(false);
   let loadError = $state("");
@@ -55,6 +56,7 @@
     <button class="nav" class:active={page === "overview"} onclick={() => (page = "overview")}>Team Overview</button>
     <button class="nav" class:active={page === "reports"} onclick={() => (page = "reports")}>Reports</button>
     <button class="nav" class:active={page === "settings"} onclick={() => (page = "settings")}>Settings</button>
+    <button class="nav" class:active={page === "diagnostics"} onclick={() => (page = "diagnostics")} title="Technical events and copyable log for troubleshooting">Diagnostics</button>
     <div class="grow"></div>
     <div class="syncbox small">
       <div><b>Folder:</b> {app.sync?.folder_display ?? "not selected"}</div>
@@ -81,8 +83,10 @@
       <Overview />
     {:else if page === "reports"}
       <Reports />
+    {:else if page === "diagnostics"}
+      <Diagnostics />
     {:else}
-      <SettingsPage />
+      <SettingsPage onopendiagnostics={() => (page = "diagnostics")} />
     {/if}
   </main>
 

@@ -111,6 +111,22 @@ The local database is a cache and recovery layer, **not** a substitute for backi
 - Pulling reads the change feed **with an overlap** (AutoNumber order is not commit order) and runs a **full version comparison every 30 minutes**. Values with unsent local changes are not overwritten by a pull.
 - Access text parameters: values over 255 characters are bound as long text (MEMO) and empty values with a declared length of 1, because the Access ODBC driver rejects other declarations (`HY104 Invalid precision value`). This was found and fixed with the real driver; SQLite-only tests would not have shown it.
 
+## 9a. Diagnostics
+
+Diagnostics (left menu) is the developer view: a bounded, redacted event log stored in the local database (separate from case history) plus the current connection state. **Copy Log** / **Copy Selected** produce plain text with a header (app version, local schema, shared database state/name/environment/schema, driver, last successful sync, queue counts, a short device id). Redaction runs before writing and again when copying.
+
+Reproduced on a Windows 11 test machine with the real 64-bit Access driver (`cargo test --no-default-features -- --ignored diag_reproduce --nocapture`):
+
+| Condition (test setup) | State shown | Code |
+|---|---|---|
+| UNC host that does not exist | unavailable | `SHARE_UNAVAILABLE` |
+| Folder reachable, file missing | unavailable | `DB_FILE_NOT_FOUND` |
+| NTFS *deny* ACL on the test folder for the current user | no permission | `DB_PERMISSION_DENIED` |
+| Maintenance flag set | maintenance | `DB_MAINTENANCE` |
+| Driver name not installed (real ODBC driver manager, SQLSTATE IM002) | driver missing | `ACCESS_DRIVER_MISSING` |
+| `Exclusive=1` holder | locked | `DB_LOCKED` (native −1024) |
+| Read-only file | read-only | `DB_READ_ONLY` (native −3035) |
+
 ## 10. Verified so far
 
 | Check | How | Result |

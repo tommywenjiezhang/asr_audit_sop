@@ -255,6 +255,9 @@ pub fn run() {
             commands::conflicts_list,
             commands::conflict_accept_shared,
             commands::diag_recent,
+            commands::diag_overview,
+            commands::diag_copy_text,
+            commands::diag_report,
         ])
         .run(tauri::generate_context!())
         .expect("error while running ASR/Audit Support Desk");

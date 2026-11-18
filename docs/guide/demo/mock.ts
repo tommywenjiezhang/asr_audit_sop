@@ -146,7 +146,14 @@ export function handler(cmd: string, args: Any): unknown {
     case "shared_import_preview": return { local_only: 0, with_message_id: 0, without_message_id: 0, done: 0, open: 0, staff: fx.staff.length, already_shared: 0, held_ops: 0 };
     case "notes_add": { const d = detail(args.ticketId); const n = { note_id: `n${Date.now()}`, author_name: "Sam Staff", body: args.body, created_at: new Date().toISOString(), updated_at: new Date().toISOString(), origin: "local", sync_state: "" }; d.notes.push(n); return n; }
     case "conflicts_list": return [];
-    case "diag_recent": return [];
+    case "diag_recent": return [
+      { id: 3, at: "2026-11-17T15:02:00Z", severity: "info", component: "sync", code: "SYNC_OK", summary: "Synchronized: sent 2 change(s) (2 accepted, 0 conflict, 0 rejected, 0 replayed), received 1 case(s)", detail: "elapsed 180 ms", correlation: null },
+      { id: 2, at: "2026-11-17T14:40:00Z", severity: "warning", component: "shared-db", code: "SHARE_UNAVAILABLE", summary: "Shared database unavailable: The shared folder cannot be reached. Your changes are saved on this computer.", detail: "", correlation: null },
+      { id: 1, at: "2026-11-17T14:30:00Z", severity: "info", component: "startup", code: "APP_START", summary: "ASR/Audit Support Desk 1.1.0 started; local schema v4; shared mode shared", detail: "", correlation: null },
+    ];
+    case "diag_overview": return { header: { app_version: "1.1.0", local_schema: 4, shared_mode: "shared", shared_state: "connected", shared_database: "ASR Support Desk (demo)", shared_environment: "test", shared_schema: 1, last_success_at: "2026-11-17T15:02:00Z", pending: 0, held: 0, conflicts: 0, failed: 0, driver: "Available64", device: "1a2b3c4d" }, latest_error_id: null, log_dir: "%APPDATA%\\gov.nj.doh.asrsupportdesk\\logs" };
+    case "diag_copy_text": return "ASR/Audit Support Desk - Diagnostics (demo)";
+    case "diag_report": return null;
     case "plugin:event|listen": return 1;
     case "plugin:event|unlisten": return null;
     default:
