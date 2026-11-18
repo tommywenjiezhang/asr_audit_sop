@@ -182,7 +182,8 @@ impl Settings {
 
     pub fn load(path: &Path) -> Settings {
         match std::fs::read_to_string(path) {
-            Ok(s) => serde_json::from_str(&s).unwrap_or_else(|e| {
+            // a UTF-8 byte-order mark (Notepad, PowerShell) is not part of the JSON
+            Ok(s) => serde_json::from_str(s.trim_start_matches('\u{feff}')).unwrap_or_else(|e| {
                 tracing::warn!(error = %e, "settings.json unreadable; using defaults");
                 Settings::default()
             }),
@@ -251,6 +252,15 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settings_with_byte_order_mark_load() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("settings.json");
+        std::fs::write(&p, "\u{feff}{\"staff_name\": \"Test Staff A\", \"shared_sync_minutes\": 1}").unwrap();
+        let s = Settings::load(&p);
+        assert_eq!((s.staff_name.as_str(), s.shared_sync_minutes), ("Test Staff A", 1));
+    }
     #[test]
     fn roundtrip_and_validation() {
         let dir = tempfile::tempdir().unwrap();

@@ -56,7 +56,7 @@ The connection check reads the database identity through a **read-only** connect
 
 **Initializing an existing empty database.** If an administrator has already created a *blank* `.accdb` on the share (as for the production path), Test Connection reports *empty Access database* and Settings shows **Initialize this database**. The app (or the `shared_setup` tool below) then: refuses if the file holds any table, linked table or query, is already an ASR database, or is open on another computer (`.laccdb` present / exclusive open fails); writes a byte-verified backup copy next to the file (`<name>.backup-<time>.accdb`, SHA-256 compared); opens the file **exclusively** and creates the tables and identity. It never creates, replaces or deletes the file.
 
-Administrator tool (same core code, no UI; close the desktop app first):
+Administrator tool (same core code, no UI; close the desktop app first). 1.2.0 adds `upgrade`, `integrity`, `backup` and `local-backup`:
 
 ```powershell
 . scripts\env.ps1; cd src-tauri
@@ -66,6 +66,10 @@ $T = "$env:CARGO_TARGET_DIR\debug\examples\shared_setup.exe"
 & $T init    <path.accdb> "ASR Support Desk" production      # empty file only; verified backup first
 & $T sync    "$env:APPDATA\gov.nj.doh.asrsupportdesk\support_desk.db" <path.accdb> "<mailbox name>"   # local backup, bind, import, sync until nothing pending
 & $T verify  "$env:APPDATA\gov.nj.doh.asrsupportdesk\support_desk.db" <path.accdb>                     # count comparison, no writes
+& $T upgrade <path.accdb>                 # older schema -> current (verified backup; refused while open)
+& $T integrity <path.accdb>               # read-only: tables, counts, 16 referential checks
+& $T backup <path.accdb> [folder]         # byte-verified copy
+& $T local-backup <support_desk.db> <folder>   # consistent local copy + integrity check
 ```
 
 Run it from PowerShell (Git Bash rewrites UNC path arguments).
@@ -121,7 +125,10 @@ The local database is a cache and recovery layer, **not** a substitute for backi
 - `DatabaseMetadata` holds `database_id`, `schema_version`, `min_client_protocol`, `maintenance`, `environment` and the creator.
 - An app that finds a **newer** schema (or a higher minimum protocol) refuses to write (*needs a newer version of this app*). An app that finds an **older** schema refuses to write until the controlled upgrade runs.
 - Upgrades are done by one person, deliberately: copy the `.accdb` first (`<name>.backup-<time>.accdb`), the upgrade sets **maintenance mode** (all apps stop writing and keep changes pending), applies the steps, then clears maintenance. A failed upgrade leaves maintenance on (writers stay blocked) and the data untouched; restore the copy or fix and re-run.
-- Schema v1 is the only shared schema in this release; later phases add tables in new versions.
+- **Schema v2 (1.2.0)** adds `OutlookOperations` (coordination of Outlook moves and handoffs, §9b) and two indexes on `TicketRelations`. Apps before 1.2.0 see v2 as *needs a newer version of this app* and stop writing (they keep working locally). The upgrade is idempotent and repairs an interrupted setup (missing tables of recorded versions are created; existing tables and data are never dropped).
+- Upgrade from the app: Settings › Shared Database shows **Upgrade the shared database…** when the database is older. Or with the admin tool (below) `upgrade <path>` — both refuse while a `.laccdb` lock file exists, write a byte-verified backup next to the file, open it exclusively, set maintenance, apply, clear maintenance, then run the integrity check.
+
+> **Development database (2026-11-18):** the file at the team default path was upgraded v1 → v2 by `shared_setup upgrade` after verified copies (`asr_email_support.backup-20261118-071413.accdb` next to it; `Documents\ASR_Development_Buildackups`). Integrity check: all 16 checks 0; 477 cases, 574 emails, 203 ownership periods unchanged.
 
 ## 9. Synchronization rules (for reviewers)
 
@@ -130,6 +137,25 @@ The local database is a cache and recovery layer, **not** a substitute for backi
 - Edits carry the values the user saw. Different fields changed by different people **merge**; the same field changed differently becomes a **conflict** keeping the original, your value and the shared value. Notes are separate records, so notes never overwrite each other. Workstation clocks are never used to pick a winner.
 - Pulling reads the change feed **with an overlap** (AutoNumber order is not commit order) and runs a **full version comparison every 30 minutes**. Values with unsent local changes are not overwritten by a pull.
 - Access text parameters: values over 255 characters are bound as long text (MEMO) and empty values with a declared length of 1, because the Access ODBC driver rejects other declarations (`HY104 Invalid precision value`). This was found and fixed with the real driver; SQLite-only tests would not have shown it.
+
+## 9b. Outlook coordination between computers (schema v2)
+
+Outlook moves and handoff emails cannot be undone and every computer sees the same team mailbox, so they are never queued offline. Before a computer moves anything it must hold the case's **reservation** in the shared database (`OutlookOperations`, unique active key *case + kind*):
+
+| Step | Shared operation (applied online, one transaction) |
+|---|---|
+| Assign / Reassign | `outlook.reserve` (kind *assign*): refuses if another computer holds an unexpired reservation for the case, or the owner changed since the user looked; otherwise changes the owner (reason *assign* / *reassign*, status Assigned) **in the same transaction** |
+| Moves | the computer moves the emails, then `outlook.progress` (moved emails, renews the 20-minute lease) |
+| Handoff | `outlook.notify_claim` (pending/failed → sending, once), send, `outlook.notify_result` (submitted / failed / uncertain). An uncertain send is resent only after Check Sent Items and an explicit *Send again* |
+| Mark Done → archive | after the shared database accepted the Done decision: `outlook.reserve` (kind *archive*), flag + move, progress, `outlook.finish`. A decision made offline is archived automatically once confirmed (5 attempts, then Diagnostics + manual Archive in Outlook); a superseded decision (new reply) is never archived |
+
+A crashed computer's reservation expires after 20 minutes of no progress and can then be taken over. Leases use the applying computer's clock only to detect abandoned work. Pending Outlook work is a separate badge (lists, Kanban, detail) — never a case status.
+
+## 9c. Case links, combining cases, email association (P2)
+
+- **Related cases**: suggestions only (same conversation, NJIIS ID, sender, similar subject, issue type, possible duplicate); never combined automatically. *Link* records a `TicketRelations` row (both cases stay separate).
+- **Combine cases** (preview first): emails, notes, issue types move; schools become extra school groups; empty fields are filled (different values are recorded in the activity, target kept); the owner carries over when the remaining case had none; the combined case's ownership period is closed (*merged*); references become aliases; circular merges are refused.
+- **Move an email to another case** (`email.move`): the old association stays recorded (inactive); a Done target with a newer reply goes to Review.
 
 ## 9a. Diagnostics
 

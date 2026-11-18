@@ -4,13 +4,17 @@
 //!   cargo run --no-default-features --example shared_setup -- init    <db.accdb> <display name> <test|production>
 //!   cargo run --no-default-features --example shared_setup -- sync    <support_desk.db> <db.accdb> <mailbox name>
 //!   cargo run --no-default-features --example shared_setup -- verify  <support_desk.db> <db.accdb>
+//!   cargo run --no-default-features --example shared_setup -- upgrade <db.accdb>            (verified backup first; refused while open)
+//!   cargo run --no-default-features --example shared_setup -- integrity <db.accdb>          (read-only checks)
+//!   cargo run --no-default-features --example shared_setup -- backup <db.accdb> [dest dir]  (byte-verified copy)
+//!   cargo run --no-default-features --example shared_setup -- local-backup <support_desk.db> <dest dir>
 //!
 //! `init` only accepts an existing EMPTY database (verified backup first). `sync` backs up the local
 //! database, connects (binds this computer to the shared database identity), queues every local-only case
 //! with the normal restartable import, and runs synchronization cycles until nothing is pending.
 //! Run it only while the desktop app is closed on this computer.
 
-use asr_support_desk_lib::{db, shared_store as ss, shared_sync as shs, sync_queue as q};
+use asr_support_desk_lib::{db, shared_admin, shared_store as ss, shared_sync as shs, sync_queue as q};
 use std::path::PathBuf;
 use std::sync::Mutex;
 
@@ -23,7 +27,11 @@ fn main() {
         Some("init") if a.len() == 4 => init(&a[1], &a[2], &a[3]),
         Some("sync") if a.len() == 4 => sync(&a[1], &a[2], &a[3]),
         Some("verify") if a.len() == 3 => verify(&a[1], &a[2]),
-        _ => Err("usage: inspect <accdb> | init <accdb> <name> <env> | sync <local.db> <accdb> <mailbox> | verify <local.db> <accdb>".into()),
+        Some("upgrade") if a.len() == 2 => upgrade(&a[1]),
+        Some("integrity") if a.len() == 2 => integrity(&a[1]),
+        Some("backup") if a.len() == 2 || a.len() == 3 => backup(&a[1], a.get(2)),
+        Some("local-backup") if a.len() == 3 => local_backup(&a[1], &a[2]),
+        _ => Err("usage: inspect <accdb> | init <accdb> <name> <env> | sync <local.db> <accdb> <mailbox> | verify <local.db> <accdb> | upgrade <accdb> | integrity <accdb> | backup <accdb> [dir] | local-backup <local.db> <dir>".into()),
     };
     if let Err(e) = r {
         eprintln!("FAILED: {e}");
@@ -32,6 +40,46 @@ fn main() {
 }
 
 type R = Result<(), String>;
+
+fn upgrade(path: &str) -> R {
+    let who = format!("shared_setup ({})", q::windows_account());
+    let r = shared_admin::upgrade_with_backup(&PathBuf::from(path), &who).map_err(|e| format!("{} {}", e.code(), e.message))?;
+    println!("upgraded schema v{} -> v{}; tables added: {:?}", r.from_version, r.to_version, r.tables_added);
+    println!("verified backup: {} (sha256 {})", r.backup_path, r.backup_sha256);
+    integrity(path)
+}
+
+fn integrity(path: &str) -> R {
+    let mut c = ss::open(&PathBuf::from(path), true).map_err(|e| format!("{} {}", e.code(), e.message))?;
+    let r = shared_admin::integrity(c.as_mut()).map_err(|e| format!("{} {}", e.code(), e.message))?;
+    println!("integrity of \"{}\" ({}) id {} schema v{}: {}", r.display_name, r.environment, r.database_id, r.schema_version, if r.ok { "OK" } else { "PROBLEMS" });
+    println!("  missing tables: {:?}", r.missing_tables);
+    for (t, n) in &r.counts {
+        println!("  {t:<22} {n}");
+    }
+    for (c, n) in &r.checks {
+        println!("  check: {c:<50} {n}");
+    }
+    if r.ok { Ok(()) } else { Err("integrity problems found".into()) }
+}
+
+fn backup(path: &str, dest: Option<&String>) -> R {
+    let (p, sha) = shared_admin::backup_now(&PathBuf::from(path), dest.map(|d| std::path::Path::new(d.as_str()))).map_err(|e| format!("{} {}", e.code(), e.message))?;
+    println!("verified copy: {p} (sha256 {sha})");
+    Ok(())
+}
+
+fn local_backup(local: &str, dest: &str) -> R {
+    let conn = rusqlite::Connection::open_with_flags(local, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(dest).map_err(|e| e.to_string())?;
+    let out = std::path::Path::new(dest).join(format!("support_desk-{}.db", chrono::Local::now().format("%Y%m%d-%H%M%S")));
+    conn.execute("VACUUM INTO ?1", [out.to_string_lossy().to_string()]).map_err(|e| e.to_string())?;
+    let chk = rusqlite::Connection::open_with_flags(&out, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(|e| e.to_string())?;
+    let ok: String = chk.query_row("PRAGMA integrity_check", [], |r| r.get(0)).map_err(|e| e.to_string())?;
+    let n: i64 = chk.query_row("SELECT COUNT(*) FROM tickets", [], |r| r.get(0)).map_err(|e| e.to_string())?;
+    println!("local backup: {} (integrity {ok}, {n} tickets)", out.display());
+    Ok(())
+}
 
 fn inspect(path: &str) -> R {
     let p = PathBuf::from(path);

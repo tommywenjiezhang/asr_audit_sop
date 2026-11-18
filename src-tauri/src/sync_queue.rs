@@ -62,7 +62,11 @@ pub fn windows_account() -> String {
 pub fn device_info(conn: &Connection, app_version: &str) -> AppResult<DeviceInfo> {
     Ok(DeviceInfo {
         device_id: device_id(conn)?,
-        device_name: std::env::var("COMPUTERNAME").unwrap_or_default(),
+        // in development test mode several app instances run on one computer: name them apart
+        device_name: match crate::profile::active().filter(|p| p.test_mode && !p.name.is_empty()) {
+            Some(p) => format!("{} [{}]", std::env::var("COMPUTERNAME").unwrap_or_default(), p.name),
+            None => std::env::var("COMPUTERNAME").unwrap_or_default(),
+        },
         windows_account: windows_account(),
         app_version: app_version.into(),
     })

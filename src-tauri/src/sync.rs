@@ -235,6 +235,13 @@ pub async fn shared_run(app: &AppHandle, trigger: &str, do_sync: bool) -> AppRes
         st.last_attempt_at = Some(now());
     }
     emit_shared(app);
+    // a background cycle may be running: a manual Sync Now waits for it instead of failing
+    if trigger != "schedule" {
+        let until = std::time::Instant::now() + Duration::from_secs(150);
+        while state.shared.is_running() && std::time::Instant::now() < until {
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    }
     let app2 = app.clone();
     let mailbox = s.mailbox_name.clone();
     let task = tauri::async_runtime::spawn_blocking(move || {

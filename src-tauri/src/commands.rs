@@ -170,15 +170,23 @@ pub async fn ticket_resume(state: State<'_, AppState>, id: i64) -> AppResult<tic
 fn resolve_case(conn: &rusqlite::Connection, target: &str) -> AppResult<i64> {
     let tgt = target.trim();
     let digits = tgt.trim_start_matches(['T', 't']).trim_start_matches('-');
-    let tid: Option<i64> = if !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit()) {
+    let mut tid: Option<i64> = if !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit()) {
         let id: Option<i64> = digits.parse().ok();
         match id {
-            Some(i) => conn.query_row("SELECT id FROM tickets WHERE id=?1 AND merged_into IS NULL", [i], |r| r.get(0)).optional()?,
+            Some(i) => conn.query_row("SELECT id FROM tickets WHERE id=?1", [i], |r| r.get(0)).optional()?,
             None => None,
         }
     } else {
-        conn.query_row("SELECT id FROM tickets WHERE upper(ticket_ref)=upper(?1) AND merged_into IS NULL", [tgt], |r| r.get(0)).optional()?
+        conn.query_row("SELECT id FROM tickets WHERE upper(ticket_ref)=upper(?1) ORDER BY merged_into IS NOT NULL LIMIT 1", [tgt], |r| r.get(0)).optional()?
     };
+    // a combined case's number or reference leads to the case it was combined into
+    for _ in 0..16 {
+        let Some(t) = tid else { break };
+        match conn.query_row("SELECT merged_into FROM tickets WHERE id=?1", [t], |r| r.get::<_, Option<i64>>(0)).optional()?.flatten() {
+            Some(next) if next != t => tid = Some(next),
+            _ => break,
+        }
+    }
     tid.ok_or_else(|| AppError::coded("NOT_FOUND", format!("No case {tgt} on this computer. Use the ticket number (T-…) or reference (ASR-…).")))
 }
 
