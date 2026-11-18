@@ -490,7 +490,11 @@ mod tests {
         assert_eq!(apply_online(c.as_mut(), &db, &claim).unwrap().result, "accepted");
         // lost acknowledgement: the same op id returns the stored acceptance, a NEW claim is refused
         assert!(apply_online(c.as_mut(), &db, &claim).unwrap().duplicate);
-        assert_eq!(apply_online(c.as_mut(), &db, &new_op("outlook.notify_claim", &t, &dev("A"), None, "A", json!({}), json!({"outlook_op_id": oid}))).unwrap().result, "rejected");
+        // another computer can never claim it (the reservation and the send belong to A)
+        assert_eq!(apply_online(c.as_mut(), &db, &new_op("outlook.notify_claim", &t, &dev("B"), None, "B", json!({}), json!({"outlook_op_id": oid}))).unwrap().result, "rejected");
+        // A itself may re-claim while "sending" (its claim acknowledgement was lost; A's local record shows it did not send)
+        let re = apply_online(c.as_mut(), &db, &new_op("outlook.notify_claim", &t, &dev("A"), None, "A", json!({}), json!({"outlook_op_id": oid}))).unwrap();
+        assert_eq!((re.result.as_str(), re.extra["reclaimed"].as_bool()), ("accepted", Some(true)));
         apply_online(c.as_mut(), &db, &new_op("outlook.notify_result", &t, &dev("A"), None, "A", json!({}), json!({"outlook_op_id": oid, "state": "submitted"}))).unwrap();
         assert_eq!(apply_online(c.as_mut(), &db, &new_op("outlook.notify_claim", &t, &dev("A"), None, "A", json!({}), json!({"outlook_op_id": oid}))).unwrap().result, "rejected", "never sent twice");
         apply_online(c.as_mut(), &db, &new_op("outlook.finish", &t, &dev("A"), None, "A", json!({}), json!({"outlook_op_id": oid, "state": "done"}))).unwrap();

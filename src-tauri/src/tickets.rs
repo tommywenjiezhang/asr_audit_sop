@@ -66,6 +66,10 @@ pub struct TicketSummary {
     pub review_reason: Option<String>,
     /// an incoming email arrived after the last staff action on an open case
     pub new_reply: bool,
+    /// unfinished Outlook work for the case, e.g. "assign:failed" / "archive:reserved:PC-B" / "handoff:uncertain"
+    pub outlook_pending: Option<String>,
+    /// latest change of any kind (history row or record update)
+    pub last_activity_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -332,8 +336,10 @@ pub struct ListQuery {
     pub received_to: String,
     pub completed_from: String,
     pub completed_to: String,
-    /// "received" (default) | "updated" | "completed"
+    /// "received" (default, newest first) | "oldest" | "updated" | "activity" | "completed" | "assigned"
     pub sort: String,
+    /// "" | "pending": only cases with unfinished Outlook work (moves, archiving, handoff)
+    pub outlook: String,
     pub limit: i64,
     pub offset: i64,
 }
@@ -353,6 +359,14 @@ fn parse_ticket_id(s: &str) -> Option<i64> {
     }
     digits.parse().ok()
 }
+
+/// Unfinished Outlook work of ticket `t` (shared reservations first, then this computer's own runs).
+pub const OUTLOOK_PENDING_SQL: &str = "COALESCE(
+    (SELECT so.kind || ':' || so.state || COALESCE(':' || so.device_name, '') FROM shared_outlook_ops so
+      WHERE so.ticket_id=t.id AND (so.active=1 OR so.state='failed') ORDER BY so.updated_at DESC LIMIT 1),
+    (SELECT 'assign:' || a.state FROM assignment_ops a WHERE a.ticket_id=t.id AND a.state IN ('moving','failed') ORDER BY a.id DESC LIMIT 1),
+    (SELECT 'handoff:' || a.notify_state FROM assignment_ops a WHERE a.ticket_id=t.id AND a.state='done' AND a.notify_state IN ('failed','uncertain','pending') ORDER BY a.id DESC LIMIT 1),
+    (SELECT 'archive:failed' FROM message_completion mc WHERE mc.ticket_id=t.id AND mc.moved_at IS NULL AND mc.last_error IS NOT NULL LIMIT 1))";
 
 pub fn list(conn: &Connection, q: &ListQuery) -> AppResult<ListResult> {
     // duplicates combined into another local ticket stay stored but are never listed
@@ -447,12 +461,17 @@ pub fn list(conn: &Connection, q: &ListQuery) -> AppResult<ListResult> {
             where_.push(format!("({})", parts.join(" OR ")));
         }
     }
+    if q.outlook == "pending" {
+        where_.push(format!("({OUTLOOK_PENDING_SQL}) IS NOT NULL"));
+    }
     let w = where_.join(" AND ");
     let params_ref: Vec<&dyn rusqlite::ToSql> = args.iter().map(|b| b.as_ref()).collect();
     let total: i64 = conn.query_row(&format!("SELECT COUNT(*) FROM tickets t WHERE {w}"), params_ref.as_slice(), |r| r.get(0))?;
     let limit = if q.limit <= 0 { 200 } else { q.limit.min(1000) };
     let order = match q.sort.as_str() {
         "updated" => "t.updated_at DESC, t.id DESC",
+        "activity" => "last_activity DESC, t.id DESC",
+        "oldest" => "COALESCE(t.first_received_at, t.created_at) ASC, t.id ASC",
         "completed" => "t.completed_at DESC NULLS LAST, t.id DESC",
         "assigned" => "t.assigned_at DESC NULLS LAST, t.id DESC",
         _ => "COALESCE(t.first_received_at, t.created_at) DESC, t.id DESC",
@@ -468,7 +487,9 @@ pub fn list(conn: &Connection, q: &ListQuery) -> AppResult<ListResult> {
                   WHERE l.ticket_id=t.id AND l.link_type IN ('original','reply') AND m.is_internal=0 AND m.scope_state='in'),
                 ({sync}), t.review_reason,
                 (t.status <> 'Done' AND COALESCE(t.last_email_received_at,'') > COALESCE((SELECT MAX(h.at) FROM ticket_history h WHERE h.ticket_id=t.id
-                    AND h.actor NOT IN ('system','sync') AND h.action NOT LIKE 'Copilot%' AND h.action NOT LIKE 'Opened%'), t.created_at))
+                    AND h.actor NOT IN ('system','sync') AND h.action NOT LIKE 'Copilot%' AND h.action NOT LIKE 'Opened%'), t.created_at)),
+                ({OUTLOOK_PENDING_SQL}),
+                MAX(t.updated_at, COALESCE((SELECT MAX(h.at) FROM ticket_history h WHERE h.ticket_id=t.id), '')) AS last_activity
          FROM tickets t WHERE {w} ORDER BY {order} LIMIT {limit} OFFSET {}",
         q.offset.max(0),
         sync = crate::sync_queue::TICKET_SYNC_SQL
@@ -510,6 +531,8 @@ pub fn list(conn: &Connection, q: &ListQuery) -> AppResult<ListResult> {
                 sync_state: r.get(28)?,
                 review_reason: r.get(29)?,
                 new_reply: r.get::<_, i64>(30)? != 0,
+                outlook_pending: r.get(31)?,
+                last_activity_at: r.get(32)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;

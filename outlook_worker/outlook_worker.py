@@ -11,7 +11,7 @@ Response: {"ok": bool, "data": {...}, "error_code": str|None,
 
 Operations: test_connection, list_mailboxes, list_folders, validate_folder,
             sync_messages, get_message, scope_inventory, locate_messages,
-            open_reply, open_new_message, complete_messages, move_messages,
+            open_reply, open_new_message, open_message, complete_messages, move_messages,
             list_accounts, send_notification, find_notification,
             create_reply_draft (legacy, unused by the UI)
 
@@ -19,8 +19,8 @@ Safety rules enforced here:
   * never deletes any item and never changes the read state
   * scanning and verification (sync_messages, get_message, scope_inventory,
     locate_messages, find_notification) only read
-  * open_reply / open_new_message only display a window; staff send replies to
-    schools manually
+  * open_reply / open_new_message / open_message only display a window; staff
+    send replies to schools manually
   * moves happen ONLY in complete_messages (Mark Done: flag complete + move to
     the completion folder) and move_messages (assignment: move to the staff
     member's folder, no flag change)
@@ -584,6 +584,19 @@ def op_open_reply(s: OutlookSession, p: dict) -> dict:
     return {"opened": True, "reply_all": reply_all, "relocated": relocated, "source": location(item)}
 
 
+def op_open_message(s: OutlookSession, p: dict) -> dict:
+    """Show the original email in its own Outlook window (read only: nothing is changed, saved or sent;
+    the read state is left as it is)."""
+    item, relocated = find_item(s, p.get("entry_id", ""), p.get("store_id", ""), p.get("imid", ""), p.get("folders", []))
+    if item is None:
+        raise WorkerError("ITEM_NOT_FOUND", "The original email could not be found in Outlook (moved, deleted or no access).")
+    try:
+        item.Display(False)
+    except Exception as exc:  # noqa: BLE001
+        raise WorkerError("DISPLAY_FAILED", "Outlook could not show the email. Close any open Outlook dialog and try again.", detail=type(exc).__name__)
+    return {"opened": True, "relocated": relocated, "source": location(item)}
+
+
 def op_open_new_message(s: OutlookSession, p: dict) -> dict:
     """Fallback when the source email is gone: a new (unthreaded) message to the sender, displayed only."""
     to = (p.get("to") or "").strip()
@@ -966,6 +979,7 @@ OPS = {
     "create_reply_draft": op_create_reply_draft,
     "open_reply": op_open_reply,
     "open_new_message": op_open_new_message,
+    "open_message": op_open_message,
     "validate_folder": op_validate_folder,
     "complete_messages": op_complete_messages,
     "scope_inventory": op_scope_inventory,
@@ -1003,6 +1017,8 @@ def mock_dispatch(op: str, p: dict) -> dict:
         return {"opened": True, "reply_all": bool(p.get("reply_all")), "relocated": False, "source": {}}
     if op == "open_new_message":
         return {"opened": True}
+    if op == "open_message":
+        return {"opened": True, "relocated": False, "source": {}}
     if op == "validate_folder":
         return {"entry_id": p.get("entry_id", ""), "store_id": p.get("store_id", ""), "path": "Inbox/Completed", "name": "Completed", "mailbox": "Mock"}
     if op == "scope_inventory":

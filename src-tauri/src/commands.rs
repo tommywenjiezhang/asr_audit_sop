@@ -166,20 +166,28 @@ pub async fn ticket_resume(state: State<'_, AppState>, id: i64) -> AppResult<tic
     Ok(t)
 }
 
-/// Add to Existing Case: `target` is a ticket number (T-000123) or a stable reference (ASR-…).
-#[tauri::command]
-pub async fn ticket_join(state: State<'_, AppState>, id: i64, target: String) -> AppResult<tickets::Ticket> {
-    use rusqlite::OptionalExtension;
-    let a = actor(&state);
-    let conn = state.db.lock().unwrap();
+/// A case named by its ticket number (T-000123 / 123) or stable reference (ASR-…).
+fn resolve_case(conn: &rusqlite::Connection, target: &str) -> AppResult<i64> {
     let tgt = target.trim();
     let digits = tgt.trim_start_matches(['T', 't']).trim_start_matches('-');
     let tid: Option<i64> = if !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit()) {
-        digits.parse().ok()
+        let id: Option<i64> = digits.parse().ok();
+        match id {
+            Some(i) => conn.query_row("SELECT id FROM tickets WHERE id=?1 AND merged_into IS NULL", [i], |r| r.get(0)).optional()?,
+            None => None,
+        }
     } else {
         conn.query_row("SELECT id FROM tickets WHERE upper(ticket_ref)=upper(?1) AND merged_into IS NULL", [tgt], |r| r.get(0)).optional()?
     };
-    let tid = tid.ok_or_else(|| AppError::coded("NOT_FOUND", format!("No case {tgt} on this computer. Use the ticket number (T-…) or reference (ASR-…).")))?;
+    tid.ok_or_else(|| AppError::coded("NOT_FOUND", format!("No case {tgt} on this computer. Use the ticket number (T-…) or reference (ASR-…).")))
+}
+
+/// Add to Existing Case: `target` is a ticket number (T-000123) or a stable reference (ASR-…).
+#[tauri::command]
+pub async fn ticket_join(state: State<'_, AppState>, id: i64, target: String) -> AppResult<tickets::Ticket> {
+    let a = actor(&state);
+    let conn = state.db.lock().unwrap();
+    let tid = resolve_case(&conn, &target)?;
     let t = crate::workflow::join(&conn, id, tid, &a)?;
     drop(conn);
     sync::nudge_shared(&state);
@@ -1703,4 +1711,287 @@ fn op_failed<T>(state: &AppState, op: &str, id: i64, r: AppResult<T>) -> AppResu
 pub async fn overview_get(state: State<'_, AppState>, done_from: Option<String>, done_to: Option<String>) -> AppResult<crate::overview::Overview> {
     let s = settings(&state);
     crate::overview::overview(&state.db.lock().unwrap(), &s, &done_from.unwrap_or_default(), &done_to.unwrap_or_default())
+}
+
+
+// ------------------------------------------------------------------ P2: related cases, links, merges, timeline
+
+#[tauri::command]
+pub async fn related_suggestions(state: State<'_, AppState>, id: i64) -> AppResult<Vec<crate::cases::Suggestion>> {
+    crate::cases::suggestions(&state.db.lock().unwrap(), id, 12)
+}
+
+#[tauri::command]
+pub async fn ticket_links(state: State<'_, AppState>, id: i64) -> AppResult<Vec<crate::cases::LinkedCase>> {
+    crate::cases::linked(&state.db.lock().unwrap(), id)
+}
+
+/// Link two cases as related (`target`: T-number, reference or local id).
+#[tauri::command]
+pub async fn ticket_link(state: State<'_, AppState>, id: i64, target: String) -> AppResult<String> {
+    let a = actor(&state);
+    let r = {
+        let conn = state.db.lock().unwrap();
+        let tid = resolve_case(&conn, &target)?;
+        crate::cases::link(&conn, id, tid, &a)
+    };
+    let rid = op_failed(&state, "Link cases", id, r)?;
+    sync::nudge_shared(&state);
+    Ok(rid)
+}
+
+#[tauri::command]
+pub async fn ticket_link_set(state: State<'_, AppState>, id: i64, relation_id: String, status: String) -> AppResult<()> {
+    let a = actor(&state);
+    crate::cases::set_relation(&state.db.lock().unwrap(), id, &relation_id, &status, &a)?;
+    sync::nudge_shared(&state);
+    Ok(())
+}
+
+/// Correct an email association: move one email of this case to another case.
+#[tauri::command]
+pub async fn email_move(state: State<'_, AppState>, id: i64, message_id: i64, target: String) -> AppResult<i64> {
+    let a = actor(&state);
+    let r = {
+        let conn = state.db.lock().unwrap();
+        let tid = resolve_case(&conn, &target)?;
+        crate::cases::move_email(&conn, id, message_id, tid, &a).map(|_| tid)
+    };
+    let tid = op_failed(&state, "Move email", id, r)?;
+    sync::nudge_shared(&state);
+    Ok(tid)
+}
+
+#[tauri::command]
+pub async fn merge_preview(state: State<'_, AppState>, sources: Vec<i64>, target: i64) -> AppResult<crate::cases::MergePreview> {
+    crate::cases::merge_preview(&state.db.lock().unwrap(), &sources, target)
+}
+
+#[tauri::command]
+pub async fn merge_run(app: AppHandle, state: State<'_, AppState>, sources: Vec<i64>, target: i64) -> AppResult<Vec<crate::cases::MergeResult>> {
+    let a = actor(&state);
+    let r = crate::cases::merge_run(&state.db.lock().unwrap(), &sources, target, &a)?;
+    sync::nudge_shared(&state);
+    use tauri::Emitter;
+    let _ = app.emit("tickets-changed", ());
+    Ok(r)
+}
+
+#[tauri::command]
+pub async fn ticket_timeline(state: State<'_, AppState>, id: i64) -> AppResult<Vec<crate::cases::TimelineItem>> {
+    crate::cases::timeline(&state.db.lock().unwrap(), id)
+}
+
+/// Open the original email in Outlook (display only; nothing is changed).
+#[tauri::command]
+pub async fn outlook_open_message(state: State<'_, AppState>, ticket_id: i64, message_id: i64) -> AppResult<()> {
+    let r = outlook_open_reply_inner(&state, ticket_id, Some(message_id), "open_message").await?;
+    let _ = r;
+    tickets::history(&state.db.lock().unwrap(), ticket_id, &actor(&state), "Opened the original email in Outlook", None, None, None)?;
+    Ok(())
+}
+
+async fn outlook_open_reply_inner(state: &AppState, ticket_id: i64, message_id: Option<i64>, op: &str) -> AppResult<serde_json::Value> {
+    let s = settings(state);
+    let src: Option<(i64, String, String, String, String)> = {
+        let conn = state.db.lock().unwrap();
+        let sql = "SELECT m.id, COALESCE(m.entry_id,''), COALESCE(m.store_id,''), COALESCE(m.internet_message_id,''), COALESCE(m.folder_entry_id,'')
+                   FROM ticket_email_links l JOIN email_messages m ON m.id=l.message_id WHERE l.ticket_id=?1 AND m.id=?2";
+        conn.query_row(sql, rusqlite::params![ticket_id, message_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))).optional()?
+    };
+    let Some((_mid, entry, store, imid, folder)) = src else {
+        return Err(AppError::coded("NO_SOURCE_EMAIL", "This email is not linked to the case."));
+    };
+    if entry.is_empty() && imid.is_empty() {
+        return Err(AppError::coded("NO_SOURCE_EMAIL", "This email has no Outlook reference on this computer (it was received from the shared database). Open it from the colleague's folder in Outlook."));
+    }
+    let cfg = sync::worker_config(state)?;
+    let params = serde_json::json!({"entry_id": entry, "store_id": store, "imid": imid, "folders": candidate_folders(state, &s, &store, &folder)});
+    sync::call_with_retry(&cfg, op, params, Duration::from_secs(60), 1).await
+}
+
+// ------------------------------------------------------------------ P3: bulk actions, team overview, export
+
+#[derive(Serialize)]
+pub struct BulkOutcome {
+    pub results: Vec<crate::bulk::BulkResult>,
+    pub ok: usize,
+    pub failed: usize,
+}
+
+/// Bulk workflow action (claim / takeover / release / start / flag_review / resume / done / reopen /
+/// archive). Every case is handled and reported separately.
+#[tauri::command]
+pub async fn tickets_bulk(app: AppHandle, state: State<'_, AppState>, action: String, ids: Vec<i64>, reason: Option<String>) -> AppResult<BulkOutcome> {
+    let a = actor(&state);
+    let results: Vec<crate::bulk::BulkResult> = if action == "archive" {
+        let mut v = vec![];
+        for id in ids.iter().copied().collect::<std::collections::BTreeSet<i64>>() {
+            let disp = tickets::display_id(id);
+            let r = match busy(&state.completing, id) {
+                Err(e) => Err(e),
+                Ok(_g) => {
+                    let st = tickets::get(&state.db.lock().unwrap(), id).map(|t| t.status);
+                    match st {
+                        Ok(s) if s != tickets::DONE => Err(AppError::coded("NOT_DONE", "Only Done cases are archived in Outlook.")),
+                        Err(e) => Err(e),
+                        Ok(_) if shared_bound(&state) && !done_confirmed(&state, id) => Err(AppError::coded("NOT_CONFIRMED", "The Done decision is not confirmed by the shared database yet.")),
+                        Ok(_) => if shared_bound(&state) { archive_shared(&state, id).await } else { run_archive(&state, id).await },
+                    }
+                }
+            };
+            v.push(match r {
+                Ok(o) if o.done => {
+                    pending_archive_set(&state, id, false);
+                    crate::bulk::BulkResult { ticket_id: id, display_id: disp, ok: true, outcome: "done".into(), message: if o.dest_path.is_empty() { "Nothing to archive".into() } else { format!("{} email(s) moved to {}", o.moved, o.dest_path) } }
+                }
+                Ok(o) => crate::bulk::BulkResult { ticket_id: id, display_id: disp, ok: false, outcome: "failed".into(), message: format!("{} email(s) failed; retry available", o.failed.len()) },
+                Err(e) => crate::bulk::BulkResult { ticket_id: id, display_id: disp, ok: false, outcome: "failed".into(), message: e.to_string() },
+            });
+        }
+        v
+    } else {
+        let r = crate::bulk::run(&state.db.lock().unwrap(), &ids, &action, reason.as_deref().unwrap_or(""), &a)?;
+        if action == "done" && shared_bound(&state) && settings(&state).archive_folder.is_some() {
+            for x in r.iter().filter(|x| x.ok && x.outcome == "done") {
+                pending_archive_set(&state, x.ticket_id, true);
+            }
+        }
+        r
+    };
+    {
+        let conn = state.db.lock().unwrap();
+        let failed = results.iter().filter(|r| !r.ok).count();
+        crate::diag::record(&conn, if failed > 0 { crate::diag::Severity::Warning } else { crate::diag::Severity::Info }, "ticket", "BULK", &format!("Bulk {action}: {} case(s), {failed} failed", results.len()), "", "");
+    }
+    sync::nudge_shared(&state);
+    use tauri::Emitter;
+    let _ = app.emit("tickets-changed", ());
+    let ok = results.iter().filter(|r| r.ok).count();
+    let failed = results.len() - ok;
+    Ok(BulkOutcome { results, ok, failed })
+}
+
+#[tauri::command]
+pub async fn export_selected(state: State<'_, AppState>, path: String, ids: Vec<i64>) -> AppResult<usize> {
+    export::export_ids(&state.db.lock().unwrap(), std::path::Path::new(&path), &ids)
+}
+
+#[tauri::command]
+pub async fn team_overview(state: State<'_, AppState>, old_days: Option<i64>, stale_days: Option<i64>) -> AppResult<crate::team::TeamOverview> {
+    crate::team::team_overview(&state.db.lock().unwrap(), old_days.unwrap_or(14), stale_days.unwrap_or(7))
+}
+
+#[derive(Serialize)]
+pub struct StaffActivity {
+    pub summary: Vec<crate::team::ActivitySummary>,
+    pub rows: Vec<crate::team::ActivityRow>,
+}
+
+#[tauri::command]
+pub async fn staff_activity(state: State<'_, AppState>, actor_name: Option<String>, limit: Option<i64>) -> AppResult<StaffActivity> {
+    let (summary, rows) = crate::team::staff_activity(&state.db.lock().unwrap(), actor_name.as_deref().unwrap_or(""), limit.unwrap_or(200))?;
+    Ok(StaffActivity { summary, rows })
+}
+
+// ------------------------------------------------------------------ P4: diagnostics, backups, integrity
+
+/// Save the redacted diagnostics log to a text file (same content as Copy Log).
+#[tauri::command]
+pub async fn diag_export(state: State<'_, AppState>, path: String, min_severity: Option<String>) -> AppResult<usize> {
+    let snap = state.shared.snapshot();
+    let text = {
+        let conn = state.db.lock().unwrap();
+        let h = crate::diag::header(&conn, &state.app_version, Some(&snap));
+        crate::diag::copy_text(&conn, &h, None, min_severity.as_deref().unwrap_or("info"), 5000)
+    };
+    std::fs::write(&path, crate::diag::redact(&text))?;
+    Ok(text.lines().count())
+}
+
+/// Test Outlook Connection (read-only; reports the profile and store count).
+#[tauri::command]
+pub async fn diag_test_outlook(state: State<'_, AppState>) -> AppResult<serde_json::Value> {
+    let cfg = sync::worker_config(&state)?;
+    let started = std::time::Instant::now();
+    let r = sync::call_with_retry(&cfg, "test_connection", serde_json::json!({}), Duration::from_secs(60), 1).await;
+    let conn = state.db.lock().unwrap();
+    match &r {
+        Ok(_) => crate::diag::record(&conn, crate::diag::Severity::Info, "outlook", "OUTLOOK_OK", &format!("Outlook connection test passed in {} ms", started.elapsed().as_millis()), "", ""),
+        Err(e) => crate::diag::record(&conn, crate::diag::Severity::Error, "outlook", e.code(), &format!("Outlook connection test failed: {e}"), "", ""),
+    }
+    r
+}
+
+fn shared_path(state: &AppState) -> AppResult<PathBuf> {
+    let p = settings(state).shared_db_path.trim().to_string();
+    if p.is_empty() {
+        return Err(AppError::coded("NOT_CONFIGURED", "No shared database path is configured."));
+    }
+    Ok(PathBuf::from(p))
+}
+
+async fn blocking<T: Send + 'static>(secs: u64, f: impl FnOnce() -> crate::shared_store::SResult<T> + Send + 'static) -> AppResult<T> {
+    match tokio::time::timeout(Duration::from_secs(secs), tauri::async_runtime::spawn_blocking(f)).await {
+        Ok(Ok(Ok(v))) => Ok(v),
+        Ok(Ok(Err(e))) => Err(AppError::coded(e.code(), format!("{} ({})", e.message, e.kind.plain()))),
+        Ok(Err(e)) => Err(AppError::msg(e.to_string())),
+        Err(_) => Err(AppError::coded("SHARED_TIMEOUT", format!("The shared database did not answer within {secs} seconds."))),
+    }
+}
+
+/// Read-only integrity verification of the shared database.
+#[tauri::command]
+pub async fn shared_integrity(state: State<'_, AppState>) -> AppResult<crate::shared_admin::IntegrityReport> {
+    let p = shared_path(&state)?;
+    let r = blocking(180, move || {
+        let mut c = crate::shared_store::open(&p, true)?;
+        crate::shared_admin::integrity(c.as_mut())
+    })
+    .await?;
+    crate::diag::record(&state.db.lock().unwrap(), if r.ok { crate::diag::Severity::Info } else { crate::diag::Severity::Warning }, "shared-db", if r.ok { "INTEGRITY_OK" } else { "INTEGRITY_PROBLEMS" },
+        &format!("Shared database integrity: {}", if r.ok { "no problems".to_string() } else { format!("{} problem check(s)", r.checks.iter().filter(|c| c.1 > 0).count() + r.missing_tables.len()) }), "", &r.database_id);
+    Ok(r)
+}
+
+/// Verified copy of the shared database (next to it, or into the chosen folder).
+#[tauri::command]
+pub async fn shared_backup_now(state: State<'_, AppState>, dest_dir: Option<String>) -> AppResult<(String, String)> {
+    let p = shared_path(&state)?;
+    let d = dest_dir.filter(|d| !d.trim().is_empty()).map(PathBuf::from);
+    let r = blocking(600, move || crate::shared_admin::backup_now(&p, d.as_deref())).await?;
+    crate::diag::record(&state.db.lock().unwrap(), crate::diag::Severity::Info, "shared-db", "SHARED_BACKUP", "Verified copy of the shared database written", "", "");
+    Ok(r)
+}
+
+/// Controlled upgrade of an older shared database (verified backup first; refused while it is open elsewhere).
+#[tauri::command]
+pub async fn shared_upgrade(state: State<'_, AppState>) -> AppResult<crate::shared_admin::UpgradeReport> {
+    let p = shared_path(&state)?;
+    let who = format!("{} ({})", actor(&state), crate::sync_queue::windows_account());
+    let r = blocking(600, move || crate::shared_admin::upgrade_with_backup(&p, &who)).await?;
+    crate::diag::record(&state.db.lock().unwrap(), crate::diag::Severity::Info, "shared-db", "SCHEMA_UPGRADED", &format!("Shared database upgraded from schema v{} to v{}; verified backup written first", r.from_version, r.to_version), "", "");
+    sync::nudge_shared(&state);
+    Ok(r)
+}
+
+#[derive(Serialize)]
+pub struct ProfileInfo {
+    pub name: String,
+    pub test_mode: bool,
+    pub outlook: String,
+    pub data_dir: String,
+    pub device_id: String,
+}
+
+#[tauri::command]
+pub async fn profile_info(state: State<'_, AppState>) -> AppResult<ProfileInfo> {
+    let p = crate::profile::active();
+    Ok(ProfileInfo {
+        name: p.map(|p| p.name.clone()).unwrap_or_default(),
+        test_mode: crate::profile::test_mode(),
+        outlook: match crate::profile::outlook_mode() { crate::profile::OutlookMode::Live => "live".into(), crate::profile::OutlookMode::Mock(_) => "mock".into() },
+        data_dir: state.data_dir.display().to_string(),
+        device_id: crate::sync_queue::device_id(&state.db.lock().unwrap())?,
+    })
 }

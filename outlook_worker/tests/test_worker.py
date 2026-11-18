@@ -506,6 +506,14 @@ class WorkerTests(unittest.TestCase):
         self.assertTrue(r["data"]["relocated"])
         self.assertTrue(self.mails[1].replies[0].displayed)
 
+    def test_open_message_only_displays_the_original(self):
+        r = self.run_op("open_message", {"entry_id": "E1", "store_id": "S1"})
+        self.assertTrue(r["ok"], r)
+        self.assertTrue(self.mails[0].displayed)
+        self.assertFalse(self.mails[0].saved, "nothing is saved")
+        self.assertEqual([w for w in self.mails[0]._writes if w != "displayed"], [], "read state, flags and folders are untouched")
+        self.assertEqual(self.run_op("open_message", {"entry_id": "GONE"})["error_code"], "ITEM_NOT_FOUND")
+
     def test_open_new_message_fallback_only_displays(self):
         r = self.run_op("open_new_message", {"to": "a@b.org", "subject": "RE: Help"})
         self.assertTrue(r["ok"], r)
