@@ -243,6 +243,8 @@ pub struct SharedStatus {
     pub running: bool,
     pub last_report: Option<CycleReport>,
     pub consecutive_failures: u32,
+    /// the configured file is an empty Access database that can be initialized
+    pub empty_database: bool,
 }
 
 /// Single-flight guard + latest status + wake signal for the background synchronization.
@@ -341,6 +343,7 @@ pub fn compose_status(conn: &Connection, mode: &str, path: &str, probe: Option<&
         s.readable = Some(p.readable);
         s.writable = Some(p.writable);
         s.driver = p.driver.map(|d| format!("{d:?}"));
+        s.empty_database = p.empty_database;
         if let Some(id) = &p.identity {
             s.database_id = Some(id.database_id.clone());
             s.database_name = Some(id.display_name.clone());
@@ -716,6 +719,46 @@ pub mod tests {
         assert_eq!(q::queue_import(&a.conn(), "A", 10).unwrap(), 0);
         a.sync(&shared).unwrap();
         assert_eq!(shared_count(&shared, "SELECT COUNT(*) FROM Tickets WHERE origin='migration'"), 2);
+    }
+
+    #[test]
+    fn import_keeps_earlier_ownership_history_as_one_record_each() {
+        let dir = tempfile::tempdir().unwrap();
+        let shared = new_shared(dir.path());
+        let a = Client::new("A");
+        q::set_mode(&a.conn(), q::MODE_STANDALONE).unwrap();
+        a.ingest(msg(1, "C1", "Help", "body", "x@y.org"));
+        let tid = a.ticket_by_imid("<m1@x>");
+        {
+            let conn = a.conn();
+            let s1 = crate::staff::save(&conn, &crate::staff::StaffInput { display_name: "Pat".into(), email: "pat@example.org".into(), ..Default::default() }).unwrap().id;
+            let s2 = crate::staff::save(&conn, &crate::staff::StaffInput { display_name: "Sam".into(), email: "sam@example.org".into(), ..Default::default() }).unwrap().id;
+            // history from the earlier version: Pat, then Sam (current owner)
+            q::open_ownership(&conn, tid, Some(s1), "2026-01-02T10:00:00Z", "assignment (earlier version)", "migration", "legacy").unwrap();
+            q::open_ownership(&conn, tid, Some(s2), "2026-02-03T10:00:00Z", "owner from Outlook folder (earlier version)", "migration", "legacy").unwrap();
+            conn.execute("UPDATE tickets SET assignee_staff_id=?1, status='Assigned' WHERE id=?2", rusqlite::params![s2, tid]).unwrap();
+        }
+        let local_before = a.count("SELECT COUNT(*) FROM ownership_history");
+        assert_eq!(local_before, 2);
+        q::set_mode(&a.conn(), q::MODE_SHARED).unwrap();
+        a.connect(&shared);
+        q::queue_import(&a.conn(), "A", 10).unwrap();
+        a.sync(&shared).unwrap();
+        a.sync(&shared).unwrap();
+        assert_eq!(a.count("SELECT COUNT(*) FROM ownership_history"), 2, "no duplicate local history after the pull");
+        assert_eq!(a.count("SELECT COUNT(*) FROM ownership_history WHERE ended_at IS NULL"), 1);
+        assert_eq!(shared_count(&shared, "SELECT COUNT(*) FROM OwnershipHistory"), 2);
+        assert_eq!(shared_count(&shared, "SELECT COUNT(*) FROM OwnershipHistory WHERE started_at='2026-01-02T10:00:00Z' AND ended_at IS NOT NULL"), 1, "original dates kept");
+        assert_eq!(shared_count(&shared, "SELECT COUNT(*) FROM OwnershipHistory WHERE started_at='2026-02-03T10:00:00Z' AND ended_at IS NULL"), 1);
+        // a second computer receives the same two periods
+        let b = Client::new("B");
+        b.connect(&shared);
+        b.sync(&shared).unwrap();
+        assert_eq!(b.count("SELECT COUNT(*) FROM ownership_history"), 2);
+        // re-sending the import is a no-op
+        let ops = a.count("SELECT COUNT(*) FROM sync_ops");
+        q::queue_import(&a.conn(), "A", 10).unwrap();
+        assert_eq!(a.count("SELECT COUNT(*) FROM sync_ops"), ops);
     }
 
     #[test]

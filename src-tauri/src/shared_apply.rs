@@ -202,6 +202,9 @@ pub struct TicketSnapshot {
     pub schools: Vec<(i64, bool)>,
     pub fields: Vec<FieldRec>,
     pub completion: Option<CompletionRec>,
+    /// existing ownership periods (import of earlier local cases), with their stable entry ids so the
+    /// shared history and the local history stay one record each
+    pub ownership: Vec<OwnershipRec>,
 }
 
 /// Everything a client needs to mirror one shared case.
@@ -770,7 +773,24 @@ fn op_create(tx: &mut Tx<'_>, res: &mut OpResult) -> SResult<()> {
     for f in &snap.fields {
         insert_field(tx, &tid, f)?;
     }
-    if let Some(owner) = k.owner_staff_id.clone().filter(|s| !s.is_empty()) {
+    let mut owner_open = false;
+    for o in snap.ownership.iter().filter(|o| !o.entry_id.is_empty() && !o.staff_id.is_empty()) {
+        if tx.c.query_one("SELECT entry_id FROM OwnershipHistory WHERE entry_id = ?", &[o.entry_id.clone().into()])?.is_some() {
+            continue;
+        }
+        // only the period of the current owner may stay open
+        let is_current = o.ended_at.is_none() && k.owner_staff_id.as_deref() == Some(o.staff_id.as_str()) && !owner_open;
+        let ended = if o.ended_at.is_none() && !is_current { Some(tx.now.clone()) } else { o.ended_at.clone() };
+        owner_open |= is_current;
+        tx.exec(
+            "INSERT INTO OwnershipHistory (entry_id, ticket_id, staff_id, started_at, ended_at, started_by, ended_by, start_reason, end_reason, op_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            &[
+                cut(&o.entry_id, 36).into(), tid.clone().into(), cut(&o.staff_id, 36).into(), cut(&o.started_at, 30).into(), cut_opt(&ended, 30),
+                cut_opt(&o.started_by, 100), cut_opt(&o.ended_by, 100), cut_opt(&o.start_reason, 255), cut_opt(&o.end_reason, 255), tx.op.op_id.clone().into(),
+            ],
+        )?;
+    }
+    if let Some(owner) = k.owner_staff_id.clone().filter(|s| !s.is_empty() && !owner_open) {
         tx.exec(
             "INSERT INTO OwnershipHistory (entry_id, ticket_id, staff_id, started_at, started_by, start_reason, op_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
             &[new_id().into(), tid.clone().into(), owner.into(), tx.now.clone().into(), cut(&tx.op.staff_name, 100).into(), "import".into(), tx.op.op_id.clone().into()],

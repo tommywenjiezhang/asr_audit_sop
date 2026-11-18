@@ -19,7 +19,7 @@ const demoShared = () => ({
   mode: "shared", path: "\\\\fileserver\\Team\\asr_email_support.accdb", state: "connected", reachable: true, readable: true, writable: true,
   database_id: "00000000-demo", database_name: "ASR Support Desk (demo)", environment: "test", schema_version: 1, compatibility: "ok", app_schema_version: 1,
   bound_database_id: "00000000-demo", bound_database_name: "ASR Support Desk (demo)", driver: "Available64", last_success_at: "2026-11-17T15:02:00Z",
-  last_attempt_at: "2026-11-17T15:02:00Z", next_attempt_at: "2026-11-17T15:04:00Z", running: false, consecutive_failures: 0,
+  last_attempt_at: "2026-11-17T15:02:00Z", next_attempt_at: "2026-11-17T15:04:00Z", running: false, consecutive_failures: 0, empty_database: false,
   queue: { pending: 0, held: 0, conflicts: 0, rejected: 0, isolated: 0 },
 });
 

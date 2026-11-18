@@ -41,7 +41,7 @@ The app **never creates or overwrites** a database at the configured path. A mis
 
 The connection check reads the database identity through a **read-only** connection first. Only a confirmed, compatible ASR shared database is ever opened for writing (the device heartbeat and synchronization). Any other Access file at the path is reported as *not a compatible ASR Support Desk shared database* (`DB_INCOMPATIBLE`) and is not changed.
 
-> **Finding (2026-11-18):** a file named `asr_email_support.accdb` **already exists** at the team default path and it is **not** an ASR shared database (it has no `DatabaseMetadata` table). The app refuses it and leaves it untouched. Before the pilot or rollout, decide deliberately: either create the shared database under a **different file name** in that folder (and update the default path), or — if that file is an obsolete placeholder — have its owner archive it first. The app will not replace it.
+> **Production database (2026-11-18):** the file at the team default path was an **empty** Access database (system tables only) prepared for this purpose. It was initialized in place as the production shared database *ASR Support Desk* (database id `cf55090a-…`, schema v1) after a verified backup (`asr_email_support.backup-20261118-063021.accdb` next to it, SHA-256 identical to the original). The first computer's 477 local cases were then imported (see §6). Any other non-empty or non-ASR file at a configured path is still refused and never changed.
 
 ## 4. First-time setup (once per team)
 
@@ -53,6 +53,22 @@ The connection check reads the database identity through a **read-only** connect
    - **Create database**. This writes the tables, a new **database identity** (a random id), the schema version and the creator.
 4. Put that path in **Database path**, **Save**, **Test Connection**.
 5. Every other computer: set the same path (if different from the default), **Save**, **Test Connection**.
+
+**Initializing an existing empty database.** If an administrator has already created a *blank* `.accdb` on the share (as for the production path), Test Connection reports *empty Access database* and Settings shows **Initialize this database**. The app (or the `shared_setup` tool below) then: refuses if the file holds any table, linked table or query, is already an ASR database, or is open on another computer (`.laccdb` present / exclusive open fails); writes a byte-verified backup copy next to the file (`<name>.backup-<time>.accdb`, SHA-256 compared); opens the file **exclusively** and creates the tables and identity. It never creates, replaces or deletes the file.
+
+Administrator tool (same core code, no UI; close the desktop app first):
+
+```powershell
+. scripts\env.ps1; cd src-tauri
+cargo build --no-default-features --example shared_setup
+$T = "$env:CARGO_TARGET_DIR\debug\examples\shared_setup.exe"
+& $T inspect <path.accdb>                                   # read-only: tables, identity
+& $T init    <path.accdb> "ASR Support Desk" production      # empty file only; verified backup first
+& $T sync    "$env:APPDATA\gov.nj.doh.asrsupportdesk\support_desk.db" <path.accdb> "<mailbox name>"   # local backup, bind, import, sync until nothing pending
+& $T verify  "$env:APPDATA\gov.nj.doh.asrsupportdesk\support_desk.db" <path.accdb>                     # count comparison, no writes
+```
+
+Run it from PowerShell (Git Bash rewrites UNC path arguments).
 
 For the two-computer **pilot**, create a *test* database (for example `asr_email_support_TEST.accdb` in a test folder) and use designated test mailbox messages — never the production mailbox or database.
 
@@ -143,7 +159,11 @@ Reproduced on a Windows 11 test machine with the real 64-bit Access driver (`car
 | Lost acknowledgement → one shared change | Real driver | Pass |
 | Unicode text and 1,000-character notes | Real driver | Pass |
 | Full P0.1 scenario suite (competing edits, identity change, restore, read-only, standalone import, missing Message-ID) | Same tests run against real `.accdb` files (`ASR_SHARED_BACKEND=access`) and SQLite | Pass |
-| A network share (UNC path), two physical computers, real Outlook test messages | **Not yet run** — this is the P0 pilot gate | Open |
+| Initialize an existing empty `.accdb` in place (verified backup, exclusive open; refuses non-empty, already-initialized and open files) | Real driver, local test files (`access_initialize_existing_empty_file`) | Pass |
+| Import keeps earlier ownership history as one record each (original dates, no local duplicates after the pull) | `import_keeps_earlier_ownership_history_as_one_record_each`, SQLite and real `.accdb` | Pass |
+| Rehearsal on copies of the production file and the real local database: init, import of 477 cases, rerun, process killed after 292 of 480 operations then rerun, a second empty workstation pulling everything | Real driver, local copies | Pass — no duplicates, counts equal |
+| **Production initialization and first import** on the UNC path (2026-11-18) | `shared_setup init/sync/verify` against the team default path (`asr_email_support.accdb`) | Pass — 20 tables; 477 cases, 574 emails, 203 ownership periods, 3 staff; rerun sends nothing |
+| Two physical computers, real Outlook test messages, staff using the UI | **Not yet run** — this is the P0 pilot gate | Open |
 
 Run the real-driver tests (never against the production path):
 

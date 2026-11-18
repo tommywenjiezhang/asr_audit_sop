@@ -275,6 +275,8 @@ pub trait SharedConn {
         Ok(self.query(sql, params)?.into_iter().next())
     }
     fn table_exists(&mut self, name: &str) -> SResult<bool>;
+    /// Names of the user tables (system tables excluded).
+    fn user_tables(&mut self) -> SResult<Vec<String>>;
 }
 
 // ------------------------------------------------------------------ SQLite backend (tests, local simulation)
@@ -366,6 +368,9 @@ impl SharedConn for SqliteShared {
     }
     fn table_exists(&mut self, name: &str) -> SResult<bool> {
         Ok(!self.query("SELECT name FROM sqlite_master WHERE type='table' AND name=?", &[name.into()])?.is_empty())
+    }
+    fn user_tables(&mut self) -> SResult<Vec<String>> {
+        Ok(self.query("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name", &[])?.iter().map(|r| col_s(r, 0)).collect())
     }
 }
 
@@ -501,6 +506,24 @@ mod access {
                 }
             }
             Ok(found)
+        }
+        fn user_tables(&mut self) -> SResult<Vec<String>> {
+            // every catalog object except the MSys* SYSTEM TABLEs: tables, linked tables and saved queries
+            // (VIEW) all count as existing content
+            let stmt = self.conn.preallocate().map_err(map_err)?;
+            let mut cursor = stmt.into_tables_cursor("", "", "%", "").map_err(map_err)?;
+            let mut out = Vec::new();
+            let (mut name, mut kind) = (Vec::new(), Vec::new());
+            while let Some(mut row) = cursor.next_row().map_err(map_err)? {
+                let has_name = row.get_text(3, &mut name).map_err(map_err)?;
+                let has_kind = row.get_text(4, &mut kind).map_err(map_err)?;
+                let kind_s = if has_kind { String::from_utf8_lossy(&kind).to_uppercase() } else { String::new() };
+                if has_name && kind_s != "SYSTEM TABLE" {
+                    out.push(String::from_utf8_lossy(&name).to_string());
+                }
+            }
+            out.sort();
+            Ok(out)
         }
     }
 
@@ -800,6 +823,84 @@ pub fn create_database(path: &Path, display_name: &str, environment: &str, creat
     initialize_schema(c.as_mut(), display_name, environment, created_by)
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct InitReport {
+    pub identity: DbIdentity,
+    /// verified copy of the file as it was before initialization
+    pub backup_path: String,
+    pub backup_sha256: String,
+    pub tables_created: Vec<String>,
+}
+
+fn sha256_file(path: &Path) -> std::io::Result<String> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+    let mut f = std::fs::File::open(path)?;
+    let mut h = Sha256::new();
+    let mut buf = vec![0u8; 1 << 16];
+    loop {
+        let n = f.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        h.update(&buf[..n]);
+    }
+    Ok(format!("{:x}", h.finalize()))
+}
+
+/// Make a byte-identical copy next to the file and verify it (SHA-256 of copy == original).
+pub fn verified_backup(path: &Path) -> SResult<(std::path::PathBuf, String)> {
+    let io = |e: std::io::Error| SharedError::new(if e.kind() == std::io::ErrorKind::PermissionDenied { ErrKind::PermissionDenied } else { ErrKind::Unavailable }, format!("backup failed: {e}"));
+    let before = sha256_file(path).map_err(io)?;
+    let dest = backup_file(path).map_err(io)?;
+    let copy = sha256_file(&dest).map_err(io)?;
+    let after = sha256_file(path).map_err(io)?;
+    if copy != before || after != before {
+        return Err(SharedError::new(ErrKind::Locked, "The backup copy does not match the original (the file changed while it was copied). Nothing was initialized."));
+    }
+    Ok((dest, before))
+}
+
+/// Initialize the shared schema inside an EXISTING, EMPTY Access database (for example a blank
+/// `.accdb` prepared by an administrator on the share). Never creates or replaces the file. Refuses when:
+/// the file already is an ASR database; it contains any table, linked table or query; another user has it
+/// open (lock file present / exclusive open fails). A verified backup is written next to the file first.
+pub fn initialize_existing(path: &Path, display_name: &str, environment: &str, created_by: &str) -> SResult<InitReport> {
+    if !path.exists() {
+        return Err(SharedError::new(ErrKind::FileNotFound, "The database file does not exist at this path."));
+    }
+    let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+    let access = ext == "accdb" || ext == "mdb";
+    // 1. read-only inspection
+    {
+        let mut ro = open(path, true)?;
+        if let Ok(id) = identity(ro.as_mut()) {
+            return Err(SharedError::new(ErrKind::Incompatible, format!("This file is already the ASR shared database \"{}\" (schema v{}). It was not changed.", id.display_name, id.schema_version)));
+        }
+        let t = ro.user_tables()?;
+        if !t.is_empty() {
+            return Err(SharedError::new(ErrKind::Incompatible, format!("This database is not empty ({} table(s)/query(ies), e.g. {}). Only an empty database can be initialized; it was not changed.", t.len(), t[0])));
+        }
+    }
+    let lock = path.with_extension(if ext == "mdb" { "ldb" } else { "laccdb" });
+    if access && lock.exists() {
+        return Err(SharedError::new(ErrKind::Locked, "The database is open on another computer (lock file present). Ask everyone to close it, then try again."));
+    }
+    // 2. verified backup of the untouched file
+    let (backup, sha) = verified_backup(path)?;
+    // 3. exclusive read-write connection: nobody else can open it while the schema is created
+    let mut c: Box<dyn SharedConn> = if access { Box::new(AccessConn::open_with(path, false, "Exclusive=1;")?) } else { open(path, false)? };
+    if !c.user_tables()?.is_empty() {
+        return Err(SharedError::new(ErrKind::Incompatible, "The database changed after the check (it is no longer empty). It was not initialized."));
+    }
+    let identity = initialize_schema(c.as_mut(), display_name, environment, created_by).map_err(|e| SharedError {
+        message: format!("{} — initialization stopped part-way; restore the backup {} before trying again.", e.message, backup.display()),
+        ..e
+    })?;
+    let tables_created = c.user_tables()?;
+    Ok(InitReport { identity, backup_path: backup.display().to_string(), backup_sha256: sha, tables_created })
+}
+
 // ------------------------------------------------------------------ connection check
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -815,6 +916,8 @@ pub struct ProbeReport {
     pub compatibility: String,
     pub driver: Option<DriverArch>,
     pub error: Option<SharedError>,
+    /// the file opened but holds no tables or queries at all (it can be initialized deliberately)
+    pub empty_database: bool,
     pub elapsed_ms: u64,
 }
 
@@ -855,6 +958,13 @@ pub fn probe(path: &Path, device: &DeviceInfo) -> ProbeReport {
         Ok(mut ro) => match identity(ro.as_mut()) {
             Ok(id) => id,
             Err(e) => {
+                if e.kind == ErrKind::Incompatible {
+                    rep.empty_database = ro.user_tables().map(|t| t.is_empty()).unwrap_or(false);
+                    if rep.empty_database {
+                        rep.error = Some(SharedError::new(ErrKind::Incompatible, "The file is an empty Access database: it has not been set up as the ASR shared database yet. An administrator can initialize it (Settings › Shared Database)."));
+                        return fin(rep);
+                    }
+                }
                 rep.error = Some(e);
                 return fin(rep);
             }
@@ -1133,5 +1243,68 @@ pub mod tests {
         assert!(create_database(&p, "x", "test", "t").is_err());
         let r = probe(&p.with_file_name("does-not-exist.accdb"), &device("A"));
         assert_eq!(r.error.unwrap().kind, ErrKind::FileNotFound);
+    }
+
+    #[test]
+    fn initialize_existing_only_accepts_an_empty_database_and_backs_it_up() {
+        let dir = tempfile::tempdir().unwrap();
+        // empty file → initialized, verified backup next to it, probe now OK
+        let p = dir.path().join("empty.db");
+        SqliteShared::open(&p).unwrap().conn.execute_batch("PRAGMA user_version=0; VACUUM;").unwrap();
+        let r = probe(&p, &device("A"));
+        assert!(r.empty_database && r.error.as_ref().unwrap().kind == ErrKind::Incompatible && !r.writable);
+        let rep = initialize_existing(&p, "Team", "production", "admin").unwrap();
+        assert!(std::path::Path::new(&rep.backup_path).exists());
+        assert_eq!(sha256_file(std::path::Path::new(&rep.backup_path)).unwrap(), rep.backup_sha256);
+        assert!(rep.tables_created.iter().any(|t| t == "Tickets") && rep.tables_created.iter().any(|t| t == "DatabaseMetadata"));
+        let r = probe(&p, &device("A"));
+        assert!(r.readable && r.writable && r.error.is_none() && !r.empty_database);
+        // already initialized → refused, unchanged
+        let before = sha256_file(&p).unwrap();
+        assert!(initialize_existing(&p, "Team", "production", "admin").unwrap_err().message.contains("already"));
+        assert_eq!(sha256_file(&p).unwrap(), before);
+        // a database with any other table → refused, unchanged, no backup written
+        let q = dir.path().join("other.db");
+        SqliteShared::open(&q).unwrap().conn.execute_batch("CREATE TABLE Budget (x INTEGER);").unwrap();
+        assert!(!probe(&q, &device("A")).empty_database);
+        let before = sha256_file(&q).unwrap();
+        let e = initialize_existing(&q, "Team", "production", "admin").unwrap_err();
+        assert!(e.message.contains("not empty"), "{e:?}");
+        assert_eq!(sha256_file(&q).unwrap(), before);
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().filter(|e| e.as_ref().unwrap().file_name().to_string_lossy().starts_with("other.backup")).count(), 0);
+        // missing file → not created
+        let m = dir.path().join("missing.db");
+        assert_eq!(initialize_existing(&m, "Team", "test", "admin").unwrap_err().kind, ErrKind::FileNotFound);
+        assert!(!m.exists());
+    }
+
+    /// Real driver: an empty .accdb (made with the ODBC installer API, like a blank file created in Access)
+    /// is initialized in place; a file holding another table, and a file open elsewhere, are refused.
+    #[test]
+    #[ignore]
+    fn access_initialize_existing_empty_file() {
+        let Ok(dir) = std::env::var("ASR_ACCESS_TEST_DIR") else { return };
+        let dir = std::path::PathBuf::from(dir);
+        let p = dir.join(format!("asr-empty-{}.accdb", uuid::Uuid::new_v4()));
+        access::create_file(&p).unwrap();
+        assert!(probe(&p, &device("A")).empty_database);
+        // open by another user → refused before any change
+        {
+            let _other = AccessConn::open(&p, false).unwrap();
+            let e = initialize_existing(&p, "x", "test", "t").unwrap_err();
+            assert_eq!(e.kind, ErrKind::Locked, "{e:?}");
+        }
+        let rep = initialize_existing(&p, "Access init test", "test", "cargo test").unwrap();
+        println!("initialized; backup {} sha {}; {} tables", rep.backup_path, rep.backup_sha256, rep.tables_created.len());
+        let r = probe(&p, &device("A"));
+        assert!(r.readable && r.writable && r.error.is_none(), "{:?}", r.error);
+        assert_eq!(r.identity.unwrap().database_id, rep.identity.database_id);
+        // non-empty Access file → refused and unchanged
+        let q = dir.join(format!("asr-other-{}.accdb", uuid::Uuid::new_v4()));
+        access::create_file(&q).unwrap();
+        AccessConn::open(&q, false).unwrap().exec("CREATE TABLE Budget (x LONG)", &[]).unwrap();
+        let before = sha256_file(&q).unwrap();
+        assert!(initialize_existing(&q, "x", "test", "t").unwrap_err().message.contains("not empty"));
+        assert_eq!(sha256_file(&q).unwrap(), before);
     }
 }

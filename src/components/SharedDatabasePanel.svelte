@@ -100,6 +100,17 @@
     }
   }
 
+  let initName = $state("ASR Support Desk");
+  let initEnv = $state<"test" | "production">("production");
+  async function initExisting() {
+    if (!st) return;
+    if (!confirm(`Set up the empty database at
+${st.path}
+as the ${initEnv.toUpperCase()} ASR shared database "${initName}"? A verified backup copy of the file is written next to it first. Everyone else must have the file closed.`)) return;
+    const r = await step("init", () => api.sharedInitializeExisting(st!.path, initName, initEnv));
+    if (r) { toast(`Initialized "${r.identity.display_name}" (${r.tables_created.length} tables). Backup: ${r.backup_path}`, "ok"); await test(); }
+  }
+
   const yesno = (v?: boolean | null) => (v == null ? "—" : v ? "Yes" : "No");
 </script>
 
@@ -141,6 +152,13 @@
     {#if st.error_message}
       <div class="notice {st.state === 'unavailable' || st.state === 'locked' ? 'warn' : 'err'} small" style="margin-top:6px">
         {st.error_message}{#if st.provider_detail} <span class="muted">({st.error_code}; {st.provider_detail})</span>{:else if st.error_code} <span class="muted">({st.error_code})</span>{/if}
+      </div>
+    {/if}
+    {#if st.empty_database}
+      <div class="notice warn small" style="margin-top:6px">
+        This file is an <b>empty</b> Access database. Initialize it as the shared database (administrator, once; a verified backup is made first):
+        <div class="row" style="margin-top:4px"><input style="width:220px" bind:value={initName} /><select style="width:130px" bind:value={initEnv}><option value="production">production</option><option value="test">test</option></select>
+          <button class="small primary" onclick={initExisting} disabled={!!busy || !initName.trim()}>{busy === "init" ? "Initializing…" : "Initialize this database"}</button></div>
       </div>
     {/if}
     {#if st.state === "identity_changed"}

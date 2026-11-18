@@ -15,7 +15,7 @@
 
 use crate::db::{get_setting, now, set_setting};
 use crate::error::{AppError, AppResult};
-use crate::shared_apply::{self as sa, CompletionRec, EmailRec, FieldRec, Op, OpResult, TicketBundle, TicketCore, TicketSnapshot};
+use crate::shared_apply::{self as sa, CompletionRec, EmailRec, FieldRec, Op, OpResult, OwnershipRec, TicketBundle, TicketCore, TicketSnapshot};
 use crate::shared_store::DeviceInfo;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
@@ -346,7 +346,29 @@ pub fn snapshot(conn: &Connection, tid: i64) -> AppResult<TicketSnapshot> {
     } else {
         None
     };
+    let ownership: Vec<OwnershipRec> = {
+        let mut st = conn.prepare(
+            "SELECT o.entry_id, COALESCE(o.staff_shared_id, s.shared_id), o.started_at, o.ended_at, o.started_by, o.ended_by, o.start_reason, o.end_reason
+             FROM ownership_history o LEFT JOIN staff s ON s.id = o.staff_id WHERE o.ticket_id=?1 ORDER BY o.started_at, o.id",
+        )?;
+        let v = st
+            .query_map([tid], |r| {
+                Ok(OwnershipRec {
+                    entry_id: r.get(0)?,
+                    staff_id: r.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                    started_at: r.get(2)?,
+                    ended_at: r.get(3)?,
+                    started_by: r.get(4)?,
+                    ended_by: r.get(5)?,
+                    start_reason: r.get(6)?,
+                    end_reason: r.get(7)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        v.into_iter().filter(|o| !o.staff_id.is_empty()).collect()
+    };
     Ok(TicketSnapshot {
+        ownership,
         core: TicketCore {
             ticket_id: t.ticket_ref.clone().unwrap_or_default(),
             ticket_ref: t.ticket_ref.clone().unwrap_or_default(),
@@ -965,7 +987,19 @@ pub fn apply_bundle(conn: &Connection, b: &TicketBundle) -> AppResult<i64> {
     if crate::shared_workflow::WORKFLOW_SYNCED {
         // local-origin open periods were provisional; the shared ownership history is authoritative now
         if !k("owner") && !b.ownership.is_empty() {
-            tx.execute("DELETE FROM ownership_history WHERE ticket_id=?1 AND origin='local' AND ended_at IS NULL", [tid])?;
+            // (open periods recorded only on this computer - including ones migrated from the earlier version -
+            //  that the shared history does not contain)
+            let shared_ids: Vec<String> = b.ownership.iter().map(|o| o.entry_id.clone()).collect();
+            let open_local: Vec<(i64, String)> = {
+                let mut st = tx.prepare("SELECT id, entry_id FROM ownership_history WHERE ticket_id=?1 AND origin<>'shared' AND ended_at IS NULL")?;
+                let v = st.query_map([tid], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<Result<_, _>>()?;
+                v
+            };
+            for (id, eid) in open_local {
+                if !shared_ids.contains(&eid) {
+                    tx.execute("DELETE FROM ownership_history WHERE id=?1", [id])?;
+                }
+            }
         }
     }
     for cpl in &b.completions {

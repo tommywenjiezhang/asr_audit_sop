@@ -1243,6 +1243,25 @@ pub async fn shared_create_database(state: State<'_, AppState>, path: String, na
     Ok(id)
 }
 
+/// Deliberate setup path: initialize the shared tables inside an EXISTING, EMPTY Access file (a blank
+/// database prepared on the share). Refuses non-empty, already-initialized or open files; verified backup first.
+#[tauri::command]
+pub async fn shared_initialize_existing(state: State<'_, AppState>, path: String, name: String, environment: String) -> AppResult<crate::shared_store::InitReport> {
+    crate::settings::validate_shared("shared", &path)?;
+    if !["test", "production"].contains(&environment.as_str()) {
+        return Err(AppError::coded("INVALID", "Environment must be test or production."));
+    }
+    let who = format!("{} ({})", actor(&state), crate::sync_queue::windows_account());
+    let p = std::path::PathBuf::from(path.trim());
+    let name2 = name.trim().to_string();
+    let r = tauri::async_runtime::spawn_blocking(move || crate::shared_store::initialize_existing(&p, &name2, &environment, &who))
+        .await
+        .map_err(|e| AppError::msg(e.to_string()))??;
+    crate::diag::record(&state.db.lock().unwrap(), crate::diag::Severity::Info, "shared-db", "DB_INITIALIZED",
+        &format!("Empty database initialized as \"{}\" ({}); {} tables; verified backup written first", r.identity.display_name, r.identity.environment, r.tables_created.len()), "", &r.identity.database_id);
+    Ok(r)
+}
+
 // ------------------------------------------------------------------ notes / conflicts / diagnostics
 
 #[tauri::command]

@@ -256,6 +256,7 @@ pub fn run() {
             commands::shared_import_preview,
             commands::shared_import_run,
             commands::shared_create_database,
+            commands::shared_initialize_existing,
             commands::notes_add,
             commands::notes_edit,
             commands::notes_delete,

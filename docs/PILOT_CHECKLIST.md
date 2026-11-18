@@ -9,7 +9,7 @@
 | Two Windows workstations, each with the 1.1.0 build and classic Outlook | Normal (non-administrator) sessions |
 | 64-bit Microsoft Access Database Engine on both | Settings › Shared Database › Test Connection shows *driver Available64* |
 | A **test** network share folder with Modify permission for both users | Not the production share folder, not OneDrive |
-| A **test** shared database | Settings › Shared Database › *Create a new shared database* → environment **test**. Note: the team default path already holds a different (non-ASR) Access file; do not use or replace it for the pilot |
+| A **test** shared database | Settings › Shared Database › *Create a new shared database* → environment **test**. Note: the team default path is now the **production** shared database (initialized 2026-11-18); the pilot must use a separate test file |
 | A designated **test mailbox** (or test folder) with test messages, never production staff mailboxes | Both computers monitor the same test folder |
 | Two staff records (e.g. *Aaron (test)*, *Wenjie (test)*), each computer's **I am** set | Settings › Staff Assignment |
 | A local backup on each computer before starting | Settings › Database / Backup |

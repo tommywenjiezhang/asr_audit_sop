@@ -117,8 +117,9 @@ export interface SharedStatus {
   app_schema_version: number; bound_database_id?: string | null; bound_database_name?: string | null; driver?: string | null;
   error_code?: string | null; error_message?: string | null; provider_detail?: string | null;
   last_success_at?: string | null; last_attempt_at?: string | null; next_attempt_at?: string | null;
-  queue: QueueSummary; running: boolean; last_report?: CycleReport | null; consecutive_failures: number;
+  queue: QueueSummary; running: boolean; last_report?: CycleReport | null; consecutive_failures: number; empty_database: boolean;
 }
+export interface InitReport { identity: DbIdentity; backup_path: string; backup_sha256: string; tables_created: string[] }
 export interface ImportPreview { local_only: number; with_message_id: number; without_message_id: number; done: number; open: number; staff: number; already_shared?: number | null; held_ops: number }
 export interface DiagEvent { id: number; at: string; severity: "info" | "warning" | "error"; component: string; code?: string | null; summary: string; detail?: string | null; correlation?: string | null }
 export interface DiagHeader {
@@ -270,6 +271,7 @@ export const api = {
   sharedImportPreview: () => invoke<ImportPreview>("shared_import_preview"),
   sharedImportRun: (limit: number | null) => invoke<number>("shared_import_run", { limit }),
   sharedCreateDatabase: (path: string, name: string, environment: string) => invoke<DbIdentity>("shared_create_database", { path, name, environment }),
+  sharedInitializeExisting: (path: string, name: string, environment: string) => invoke<InitReport>("shared_initialize_existing", { path, name, environment }),
   notesAdd: (ticketId: number, body: string) => invoke<Note>("notes_add", { ticketId, body }),
   notesEdit: (noteId: string, body: string) => invoke<void>("notes_edit", { noteId, body }),
   notesDelete: (noteId: string) => invoke<void>("notes_delete", { noteId }),
