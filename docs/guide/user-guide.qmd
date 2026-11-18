@@ -1,492 +1,204 @@
 ---
 title: "ASR/Audit Support Desk"
-subtitle: "Step-by-step guide for Help Desk staff"
-author:
-  - name: "Wenjie Zhang"
-    email: "wenjie.zhang@doh.nj.gov"
+subtitle: "Simple guide for support staff"
+author: "ASR/Audit Support Desk team"
 date: last-modified
 date-format: "MMMM D, YYYY"
 ---
 
 ::: {.callout-note appearance="simple"}
-**About the pictures.** All screenshots in this guide use **made-up demo data** (fictional schools, people and emails). Your own screen shows your real tickets. Red boxes with numbers show **where to click**, in the order of the steps.
+The screenshots use made-up names, schools, and emails. Red numbers show where to click. Your screen will show your real tickets.
 :::
 
-# What this app does {#sec-intro}
+# What You Can Do With This App {#sec-start}
 
-The Support Desk watches the help-desk mailbox in Outlook and turns each new email into a **ticket**. A ticket can be **assigned** to a staff member: its emails move into that person's Outlook folder and they get a short handoff email. For every ticket the app prepares a text (a "prompt") that you paste into **Microsoft Copilot**, which writes a reply for you. You check the reply, send it from **Outlook**, and click **Mark Done**.
+The app helps you manage ASR and Audit support emails from **classic Outlook**. It turns emails into tickets, helps staff share work, and keeps a history of what happened.
 
-::: {.flow}
-<span>1 · Check for new emails</span><i>→</i><span>2 · Assign (if needed)</span><i>→</i><span>3 · Review the ticket</span><i>→</i><span>4 · Copy Prompt</span><i>→</i><span>5 · Paste into Copilot</span><i>→</i><span>6 · Open Outlook Reply</span><i>→</i><span>7 · Paste &amp; send</span><i>→</i><span>8 · Mark Done</span>
-:::
+You review and send school replies yourself in Outlook. The app does not send those replies.
 
-::: {.callout-tip}
-## A typical day
-- **Whoever hands out the work:** click **Unassigned** above the ticket list, open each ticket and click **Assign** — or tick several and click **Assign selected**. **Team Overview** shows who has how much.
-- **Everyone:** click **My Tickets**, open a ticket, click **Start Work**, write the reply with Copilot, send it from Outlook and click **Mark Done**.
-:::
+![The ticket screen](images/01-overview.png){fig-alt="The ticket list and ticket details"}
 
-The main screen has two parts: the **ticket list** on the left (1) and the **ticket workspace** on the right (2).
+## Install and open the app
 
-![The main screen](images/01-overview.png){fig-alt="Main screen with the ticket list on the left and the selected ticket on the right"}
+1. Run the supplied Windows installer.
+2. Open **ASR Audit Support Desk** from the Start menu.
+3. Keep classic Outlook open.
 
-::: {.callout-important}
-## Good to know
+Use the normal Windows account. Do not use **Run as administrator**.
 
-- The app **never sends a reply to a school**. You always send replies yourself from Outlook.
-- The only email the app sends by itself is the **handoff email to a staff member** when you assign a ticket to them.
-- Checking for new emails **never changes** anything in Outlook (nothing is marked read, moved or flagged).
-- Only two of your actions change Outlook: **Assign** moves the ticket's emails into the person's folder, and **Mark Done** flags them complete and moves them to the completion folder.
-- Nothing is ever deleted.
-:::
+![Open the app](images/00-start-menu.png){fig-alt="The app in the Windows Start menu"}
 
-# Install and open the app {#sec-install}
+# Set up Outlook once {#sec-settings}
 
-1. Open your **Documents** folder and double-click **ASR Audit Support Desk_1.0.0_x64-setup.exe**. You do **not** need administrator rights.
-2. When it is finished, click the **Start** button, type **ASR Audit**, and click **ASR Audit Support Desk**.
+## Connect Outlook
 
-![Open the app from the Start menu](images/00-start-menu.png){fig-alt="Illustration of the Start menu with the ASR Audit Support Desk app"}
+1. Open **Settings**.
+2. Click **Test Outlook Connection**.
+3. Wait for the green success message.
 
-::: {.callout-warning}
-Never use **Run as administrator**. Outlook and the app must run the normal way, or the app cannot talk to Outlook.
-:::
+![Test Outlook](images/02-settings-test-connection.png){fig-alt="The Outlook connection test"}
 
-Keep **classic Outlook** open while you use the app. When you close the app window, it keeps running in the system tray (near the clock).
+## Choose the mailbox and folders
 
-# One-time setup (Settings) {#sec-settings}
+1. Under **Monitored Folders**, click **Find Mailboxes**.
+2. Choose the shared mailbox.
+3. Choose **Inbox**, or another folder used by your team.
 
-You only do this once. Click **Settings** in the dark menu on the left.
+![Find the mailbox](images/03-settings-find-mailbox.png){fig-alt="The mailbox list"}
 
-## Connect to Outlook
+![Choose the Inbox](images/04-settings-pick-inbox.png){fig-alt="The Outlook folder tree"}
 
-1. Click **Test Outlook Connection** (1).
-2. A green message (2) confirms that the app can reach Outlook.
+Choose one folder option:
 
-![Test the Outlook connection](images/02-settings-test-connection.png){fig-alt="Settings, Outlook Connection section with the Test button and a green confirmation"}
+- **Monitor this folder only** reads only the selected folder.
+- **Include all child folders** reads the folder and everything inside it.
+- **Include selected child folders** lets you choose only the folders you need.
 
-## Choose the mailbox and the Inbox
+When using selected folders, tick **and its subfolders** to include folders below the selected folder. Read the **Scanning:** message before saving.
 
-1. Under **Monitored Folders**, click **Find Mailboxes** (1).
-2. Click the **shared help-desk mailbox** (2).
+![Choose child folders](images/05-settings-child-folders.png){fig-alt="Child folder selection and the Scanning message"}
 
-![Find the shared mailbox](images/03-settings-find-mailbox.png){fig-alt="Find Mailboxes button and the list of mailboxes"}
+Choose **All items in the folder (recommended)** unless your manager says to use **Unread items only**.
 
-3. In the folder tree, click **Inbox** (3).
-
-![Choose the Inbox](images/04-settings-pick-inbox.png){fig-alt="Folder tree with Inbox selected"}
-
-## Choose your folders
-
-Emails are often filed into sub-folders. Tell the app which ones to read:
-
-4. Choose **Include selected child folders** (4).
-5. Tick **your own folder** (5) — in the picture it is called *My Folder*.
-6. Tick **and its subfolders** (6) so everything filed below your folder is included too.
-7. Read the blue **Scanning:** line (7). It says in plain words what the app will read.
-
-For shared mailboxes, the app also recovers child folders that classic Outlook does not expose through the ordinary folder collection by consulting the mailbox hierarchy. A folder that exists but cannot be opened is reported as a warning/error instead of being silently treated as empty.
-
-![Choose your folder and its subfolders](images/05-settings-child-folders.png){fig-alt="Child folder options with My Folder and its subfolders ticked, and the Scanning summary line"}
-
-::: {.callout-tip}
-Do **not** choose *Include all child folders* in the shared mailbox — that would also read every colleague's folder and the *Completed* folder.
-:::
-
-8. Leave **Scan** on **All items in the folder (recommended)** (8).
-
-![Scan mode](images/06-settings-scan-mode.png){fig-alt="Scan options: all items or unread items only"}
+![Choose a scan mode](images/06-settings-scan-mode.png){fig-alt="The scan mode choices"}
 
 ## Choose the completion folder
 
-This is where **Mark Done** puts finished emails.
+1. In **Completion Folder (Mark Done)**, click **Open**.
+2. Choose the folder for finished emails.
+3. Click **Validate**.
+4. Continue when the folder shows **OK**.
 
-1. In **Completion Folder (Mark Done)**, click **Open** (1).
-2. Click the folder for finished emails, for example **Completed** (2).
-3. Click **Validate** (3). A green **OK** (4) means the folder can be used.
+![Choose the completion folder](images/07-settings-completion-folder.png){fig-alt="Completion folder selection and validation"}
 
-![Choose and check the completion folder](images/07-settings-completion-folder.png){fig-alt="Completion folder section with Open, the folder tree with Completed selected, Validate and a green OK"}
+The completion folder is not scanned for new tickets.
 
-## Copilot instructions (optional)
+## Add staff members
 
-The box (1) holds the general instructions that are put at the top of every prompt. You normally do not need to change them. **Restore Default** (2) brings back the original text.
+1. Open **Staff Assignment**.
+2. Click **+ Add staff member** or **Edit**.
+3. Enter the name and email address.
+4. Click **Choose folder...** and choose the person's Outlook folder.
+5. Click **Save staff member**.
+6. Choose your own name beside **I am**.
+7. Click **Save Settings**.
 
-![Copilot prompt instructions](images/08-settings-prompt.png){fig-alt="Copilot Prompt settings with the instructions box and Restore Default"}
+![Staff Assignment](images/36-staff-settings.png){fig-alt="Staff names, email addresses, folders, and the I am setting"}
 
-## Save
+![Edit a staff member](images/37-staff-edit.png){fig-alt="The staff member form"}
 
-Click **Save Settings** (1) at the top of the page. A green message (2) confirms it.
+# Find and review tickets {#sec-tickets}
 
-![Save the settings](images/09-settings-save.png){fig-alt="Save Settings button and the confirmation message"}
+1. Click **Tickets**.
+2. Click **Check Now**.
+3. Open a ticket from **Current Tickets**.
 
-## Staff members (Staff Assignment) {#sec-staff}
+Use **My Tickets**, **Unassigned**, the search box, and **More filters** to find work. Use **Ticket History** for finished or moved tickets. Click **Clear Filters** if a ticket seems to be missing.
 
-Each person who can receive tickets needs a **name**, the **email address** that gets the handoff email, and **their own Outlook folder** (for example *Inbox › Teammate A*).
+![Check tickets](images/38-current-tickets.png){fig-alt="Current Tickets, My Tickets, Unassigned, and Ticket History"}
 
-1. In **Staff Assignment**, the table (1) lists everyone. Click **+ Add staff member** (2), or **Edit** next to a name.
-2. Choose **I am** (3) — your own name. This is used by the **My Tickets** shortcut on this computer.
-3. **Send notifications from** (4): the Outlook account the handoff emails are sent from. Click **Find accounts** and pick your own account. Then click **Save Settings**.
+Check the sender, school, issue, and email. Add a school with **+ Add school**. Add an issue with **+ Add issue type...**. Write work already completed under **Staff actions already taken** and other information under **Staff notes**.
 
-![Staff Assignment](images/36-staff-settings.png){fig-alt="Staff table with names, emails and folders, the Add button, I am and the sending account"}
+# Claim, assign, and reassign {#sec-assign}
 
-When adding or editing a person, type the email address (1), click **Choose folder…** and click their folder (2), then **Save staff member** (3).
-
-![Add or edit a staff member](images/37-staff-edit.png){fig-alt="Staff form with email, folder tree and the Save button"}
-
-::: {.callout-note}
-- A staff folder also covers its subfolders (for example *Inbox › Teammate A › Training*).
-- **Deactivate** keeps the person's name on old tickets but nobody can assign new tickets to them.
-- The staff list is stored on this computer. Set it up the same way on each computer that uses the app.
-:::
-
-# Check for new emails {#sec-check}
-
-1. Click **Tickets** in the left menu.
-2. Click **Check Now** (1) at the bottom left. The box above it (2) shows which folders are read and when the last check happened.
-3. A message (3) tells you how many new emails and tickets were found. Then the app checks where all known emails are now, so **Current Tickets** is up to date.
-4. A yellow warning such as *Some folders could not be checked completely* means the list was **not** changed — nothing was moved to Ticket History. Click **Check Now** again later.
-
-![Check for new emails](images/10-check-now.png){fig-alt="Check Now button, folder status box and result message"}
-
-::: {.callout-tip}
-If automatic checking is on (Settings › Schedule), the app checks by itself every few minutes. Check Now is for when you don't want to wait.
-:::
-
-# Find a ticket {#sec-find}
-
-## Current Tickets, Awaiting Verification and Ticket History
-
-The list has tabs (1):
-
-- **Current Tickets** — tickets with at least one email that is **now** in the folders you chose in Settings (the completion folder never counts).
-- **Awaiting Verification** — only shown when needed, for example after an update or after you change the folders. These tickets have not been checked yet; click **Check Now**.
-- **Ticket History** — earlier tickets whose emails are no longer in your folders (completed, handed to someone outside your folders, or moved). Nothing is deleted.
-
-The grey bar (2) shows the mailbox, the folders that count, and when they were last verified. **My Tickets** (3) shows your open tickets; **Unassigned** (4) shows tickets nobody owns yet.
-
-![Tabs, folder scope and shortcuts](images/38-current-tickets.png){fig-alt="List tabs, the folder scope bar and the My Tickets and Unassigned shortcuts"}
-
-::: {.callout-tip}
-Each **Check Now** first imports new emails and then checks where every known email is now. If someone moves an email in Outlook, the ticket follows it — no duplicate is created. A check that could not finish never moves tickets to History.
-:::
-
-## Search
-
-Type anything you know into the search box (1): a school name, NJIIS ID, ticket number (for example `T-000012`), a sender's name, email or phone number, or words from the email. The number of matching tickets (2) updates as you type.
-
-![Search for a ticket](images/11-search.png){fig-alt="Search box with an NJIIS ID typed and one matching ticket"}
-
-## Filter
-
-- **Status** (1): *Open (not Done)*, *Unassigned*, *Assigned*, *In Progress*, *Done* or *All statuses*.
-- **Assignee** (2): one person, or *No assignee*.
-- **More filters** (3): issue type, school, sender, *Received*, *Assigned* and *Completed* dates (end date included), age, sorting — and in Ticket History the **reason** a ticket left Current Tickets.
-- **Clear Filters** (4) puts everything back.
-
-![Filters](images/12-filters.png){fig-alt="Status and assignee filters, date filters and Clear Filters"}
-
-# Review a ticket {#sec-review}
-
-Click a ticket in the list. The ticket opens on the right.
-
-## The top of the ticket
-
-The ticket number (1) and its status (2) are at the top, together with the buttons you need for the reply. These stay visible while you scroll.
-
-| Status | Meaning |
+| Button | What it means |
 |---|---|
-| **Unassigned** | Nobody owns the ticket yet |
-| **Assigned to …** | Assigned (or found in that person's folder), work not started |
-| **In Progress — …** | The owner clicked **Start Work** |
-| **Done — …** | Finished with **Mark Done** |
+| **Claim** | You take responsibility. The email does not move. |
+| **Assign** | Give the ticket to a staff member. The incoming email moves to that person's folder and one handoff email is sent. |
+| **Reassign** | Transfer the ticket to another staff member. The assignment history stays with the ticket. |
 
-: Statuses {tbl-colwidths="[30,70]"}
+To claim a ticket, open it and click **Claim**. Click **Start Work** when you begin. If another person owns it, use **Take over...**. The earlier history stays on the ticket.
 
-![Ticket header and buttons](images/13-ticket-header.png){fig-alt="Ticket number, status and the action buttons"}
+To assign or reassign:
 
-The other labels next to the status are **hints**, not statuses:
+1. Open the ticket and click **Assign** or **Reassign**.
+2. Choose the staff member.
+3. Check the email address and folder.
+4. Add a handoff note if needed.
+5. Click **Assign**.
 
-| Label | Meaning | What to do |
+![Assignment buttons](images/43-assign-buttons.png){fig-alt="Assign, Reassign, and Start Work"}
+
+![Assignment dialog](images/39-assign-dialog.png){fig-alt="The assignment dialog"}
+
+The app moves incoming school emails only. If a move fails, fix the problem and click **Retry assignment**. If the handoff email fails, click **Retry Notification**. The assignment history stays in the ticket.
+
+![Assignment result](images/40-assign-result.png){fig-alt="The assignment result"}
+
+# Write and send the reply {#sec-reply}
+
+1. Click **Copy Prompt**.
+2. Paste it into Microsoft Copilot.
+3. Read Copilot's draft. Check names, school IDs, dates, and completed actions.
+4. Copy the reply.
+5. Click **Open Outlook Reply** or **Reply All**.
+6. Paste the reply into Outlook and click **Send**.
+
+![Copy the prompt](images/19-copy-prompt.png){fig-alt="Copy Prompt"}
+
+![Open the Outlook reply](images/22-open-outlook-reply.png){fig-alt="Open Outlook Reply"}
+
+# Mark a ticket Done {#sec-done}
+
+After sending the reply in Outlook, return to the ticket and click **Mark Done**. The app records the decision and keeps the ticket history. If the app reports a problem, fix the problem and click **Retry Mark Done**. Open a finished ticket from **Ticket History** and click **Reopen** to work on it again.
+
+![Mark Done](images/26-mark-done.png){fig-alt="Mark Done on a ticket"}
+
+# Shared ticket records {#sec-shared}
+
+The shared records file lets staff see the same tickets, owners, notes, statuses, and history. The default file is:
+
+`\\epi-qb-5\VPD_Shared\PgmDocs\Assessment and Coverage\Annual Immunization Status Report\ASR Master List Revamp--2023\asr_email_support.accdb`
+
+Open **Settings > Shared Database** to see the connection status. Use **Test Connection** to check it. The same check is called **Test Database Connection** on **Diagnostics**. If the file is unavailable, the app may save changes locally and show that they are waiting to be shared. When the connection returns, use **Sync Now**.
+
+If two people change the same ticket, open **Conflicts** and choose **Keep shared value** or **Use my value**.
+
+# Team tools {#sec-team}
+
+Use the left menu to open **Kanban**, **Team Overview**, **Conflicts**, **Reports**, **SOP Templates**, or **Diagnostics**.
+
+- **Kanban** groups tickets by status. Filters and drag-and-drop use the same checks as the ticket buttons.
+- **Team Overview** shows workload, older tickets, pending Outlook work, conflicts, and staff activity.
+- **Related cases** shows possible matches. Link or combine only after reviewing the details.
+- **Diagnostics** lets you test Outlook and the shared file and copy a problem log.
+
+![Team Overview](images/45-team-overview.png){fig-alt="Team Overview with staff workload"}
+
+# Common Problems and How to Fix Them {#sec-help}
+
+| Problem | What to do |
+|---|---|
+| Outlook cannot connect | Open classic Outlook and restart the app normally. |
+| A folder is missing | Check the folder mode in Settings and click **Check Now**. |
+| The shared file cannot be opened | Check the network and your permission. Use **Test Database Connection**. |
+| A ticket is missing | Check **Ticket History**, clear filters, and click **Check Now**. |
+| Assignment failed | Fix the message shown and click **Retry assignment**. |
+| Mark Done failed | Fix the message shown and click **Retry Mark Done**. |
+| Two people changed a ticket | Open **Conflicts** and choose the correct value. |
+
+To send a problem report:
+
+1. Open **Diagnostics**.
+2. Select the problem event.
+3. Click **Copy Log** or **Export Log to File...**.
+4. Send the copied text or exported file to the developer.
+
+# How to Test the App {#sec-uat}
+
+Use test emails only. Do not move, flag, or send real Outlook messages.
+
+| What to do | What should happen | Result |
 |---|---|---|
-| **Check issue type** | The app was not sure what the problem is | Check the issue and correct it |
-| **Possible duplicate** | Another ticket looks similar | Check it; click *Not a duplicate* if it isn't |
-| **Needs review** | Worth a second look | Click *Reviewed — clear flag* when done |
-| **Ownership conflict** | The ticket's emails are in **two** staff members' folders; the owner was not changed | Decide who owns it and **Reassign** it to that person |
-| **Awaiting verification** | Not checked since an update or a folder change | Click **Check Now** |
-| **Ticket History: …** | The emails are no longer in your folders (reason shown) | Nothing — see [Ticket History](#sec-history) |
-
-: Hint labels {tbl-colwidths="[25,40,35]"}
-
-## Issue
-
-The app recognises what the email is about. The first label (1) is the main issue. If the email mentions more than one problem, you will see more labels (2). Use **+ Add issue type…** (3) to add one, or **✕** to remove one.
-
-![Issue types](images/14-issues.png){fig-alt="Issue section with two issue labels and the add-issue menu"}
-
-## Sender
-
-Check the sender's name, title, email and phone (1). Click into a box to correct it. Changes are saved automatically when you click outside the box.
-
-![Sender details](images/15-sender.png){fig-alt="Sender section with name, title, email, phone and extension"}
-
-## What the little labels under a box mean
-
-- **Extracted – Not Verified** (1): the app found this in the email.
-- Click **✓ verify** (2) after you have checked the value (for example in NJIIS). It then shows **Verified**.
-- If you typed a value yourself, it shows **Entered**.
-- Empty boxes show *Not provided*. That is fine — you never have to fill in everything.
-
-![Field labels and verify](images/16-field-labels.png){fig-alt="A field with the Extracted - Not Verified label and the verify link"}
-
-## Schools
-
-When one email is about several schools, each school gets its own group (1, 2), so each NJIIS ID and address stays with the right school. Use **+ Add school** (3) if the app missed one.
-
-![Two schools in one ticket](images/17-two-schools.png){fig-alt="School 1 and School 2 groups with their own names and IDs"}
-
-## Staff actions and notes
-
-- **Staff actions already taken** (1): write what you have **already done**, for example *"Reset the account on 11/17."* Copilot will only say something was done if it is written here.
-- **Staff notes** (2): anything else for yourself or colleagues.
-
-![Staff actions and notes](images/18-staff-actions.png){fig-alt="Staff actions and staff notes boxes"}
-
-# Assign or reassign a ticket {#sec-assign}
-
-Assigning a ticket **moves its emails into that person's Outlook folder** and then **emails them a handoff summary**. The school is never notified.
-
-1. Open the ticket and click **Assign** (or **Reassign**, 2). The current owner is shown in the status (1). **Start Work** (3) changes *Assigned* to *In Progress* and keeps the owner.
-
-![Assign, Reassign and Start Work](images/43-assign-buttons.png){fig-alt="Ticket header with owner, Reassign and Start Work buttons"}
-
-2. Choose the person (1). Before anything happens, the box (2) shows their notification email, the destination folder, how many tickets and emails, and whether a notification will be sent. Add an optional **handoff note** (3) and click **Assign** (4).
-
-![Check the assignment before running it](images/39-assign-dialog.png){fig-alt="Assign dialog with staff member, confirmation details, handoff note and Assign button"}
-
-3. The result (1) is shown for each ticket.
-
-![Assignment result](images/40-assign-result.png){fig-alt="Result table showing assigned and notification submitted"}
-
-To assign **several tickets** to one person, tick them in the list (1, 2) and click **Assign selected** (3). Each ticket is handled separately; one problem does not stop the others.
-
-![Select several tickets](images/41-bulk-select.png){fig-alt="Two tickets ticked and the Assign selected button"}
-
-::: {.callout-important}
-## What happens, in order
-1. Every email of the ticket from the school is moved to the person's folder (your replies, drafts and staff emails are not moved; nothing is marked read or flagged).
-2. **Only when all moves worked** is the ticket assigned and the handoff email sent to the person's email address.
-3. If a move fails, the ticket says **Not finished** with the reason and a **Retry assignment** button. Emails that were already moved are not moved again, and no email is sent yet.
-:::
-
-## If the handoff email failed
-
-The assignment stays done; only the email is missing. The **Assignment** box shows **Assigned — notification failed** (1) with the reason. Fix it (for example open Outlook) and click **Retry Notification** (2). The emails are not moved again.
-
-![Notification failed](images/42-notification-failed.png){fig-alt="Assignment box showing notification failed and Retry Notification"}
-
-- *Notification submitted to Outlook* means Outlook accepted it. It does **not** prove it was delivered.
-- *Notification outcome uncertain* means Outlook may or may not have sent it. Click **Check Sent Items** first. Only if it is not there, use **Send again…** — the app never resends on its own.
-- Reassigning to the **same person** sends no new email.
-
-::: {.callout-note}
-## Good to know about assigning
-- You can only choose **active** staff members who have an email address and a folder (see [Staff members](#sec-staff)).
-- A **Done** ticket must be **Reopened** before it can be assigned.
-- If someone drags a ticket's emails into a staff folder by hand in Outlook, the app sets that person as the owner at the next check — but **no handoff email** is sent.
-- The **Assignment history** in the Assignment box lists every assignment: who, when, the folder, the note and the notification result.
-:::
-
-# Write the reply with Copilot {#sec-reply}
-
-## Step 1 — Copy the prompt
-
-Click **1. Copy Prompt** (1). The message *Prompt copied* (2) confirms it is on the clipboard.
-
-![Copy the prompt](images/19-copy-prompt.png){fig-alt="Copy Prompt button and the Prompt copied message"}
-
-Further down, **Copilot Prompt Preview** (1) shows exactly what was copied. Missing information appears as *[Not provided]*.
-
-![The prompt preview](images/20-prompt-preview.png){fig-alt="Preview of the copied prompt text"}
-
-## Step 2 — Let Copilot write the reply
-
-1. Open **Microsoft Copilot**.
-2. Click into the message box and press <kbd>Ctrl</kbd>+<kbd>V</kbd> to paste the prompt, then press <kbd>Enter</kbd>.
-3. Read Copilot's answer. When it looks right, click **Copy** under the answer.
-
-![Copilot drafts the reply (illustration)](images/21-copilot.png){fig-alt="Illustration of a Copilot chat with the pasted prompt and a drafted reply"}
-
-::: {.callout-important}
-Always **read Copilot's reply** before you send it. Check names, school IDs and anything it says was done.
-:::
-
-## Step 3 — Open the Outlook reply
-
-Back in the Support Desk, click **2. Open Outlook Reply** (1). Use **Reply All** (2) if everyone on the email should get the answer. The message (3) confirms that Outlook opened the reply.
-
-![Open the Outlook reply](images/22-open-outlook-reply.png){fig-alt="Open Outlook Reply and Reply All buttons with the confirmation message"}
-
-Outlook shows a normal reply window, already addressed to the sender, with your signature and the original email below.
-
-![The Outlook reply window (illustration)](images/23-outlook-reply-window.png){fig-alt="Illustration of an Outlook reply window ready for pasting"}
-
-## Step 4 — Paste and send
-
-Click into the reply above your signature, press <kbd>Ctrl</kbd>+<kbd>V</kbd>, check the text once more, and click **Send**.
-
-![Paste Copilot's reply and send (illustration)](images/24-outlook-paste-send.png){fig-alt="Illustration of the reply with the pasted text and the Send button"}
-
-::: {.callout-tip}
-## Shortcut
-**Copy Prompt & Open Outlook Reply** (1) does steps 1 and 3 with one click. If one part does not work, the app tells you which one.
-:::
-
-![Copy and open in one click](images/25-copy-and-open.png){fig-alt="The Copy Prompt and Open Outlook Reply combined button"}
-
-# Finish the ticket: Mark Done {#sec-done}
-
-After you have sent the reply, click **3. Mark Done**. The app then:
-
-1. flags the ticket's email(s) as **complete** in Outlook,
-2. moves them to the **completion folder**,
-3. sets the ticket to **Done** (1) and shows a confirmation (2).
-
-The ticket keeps its owner and moves to **Ticket History** with the reason *Completed*.
-
-![Ticket marked Done](images/26-mark-done.png){fig-alt="Ticket now Done with the confirmation message and the Reopen button"}
-
-In Outlook, the email is now in the completion folder with a completed flag.
-
-![The finished email in Outlook (illustration)](images/27-outlook-completed.png){fig-alt="Illustration of the Completed folder with flagged-complete emails"}
-
-## If Mark Done reports a problem
-
-Sometimes Outlook cannot finish (for example Outlook was closed, or you cannot write to the folder). Then:
-
-- a red message (1) explains that the ticket stays open (not Done),
-- the email that failed and the reason are listed (2),
-- fix the problem and click **3. Retry Mark Done** (3). Steps that already worked are **not** repeated.
-
-![Mark Done problem and Retry](images/28-mark-done-retry.png){fig-alt="Error message, the failed email and the Retry Mark Done button"}
-
-## Reopen a ticket
-
-Open a Done ticket (in **Ticket History**) and click **Reopen** (1) to work on it again. It becomes **In Progress** again (or **Unassigned** if it had no owner). The email stays where it is in Outlook, so the ticket stays in Ticket History until one of its emails is back in your folders — for example after you **Assign** it, which moves the emails into a staff folder.
-
-![Reopen a Done ticket](images/29-reopen.png){fig-alt="Reopen button on a Done ticket"}
-
-In the **Emails** section, **✓ archived** (1) shows that the email was moved to the completion folder.
-
-![Archived email](images/30-archived-email.png){fig-alt="Emails section with the archived label"}
-
-::: {.callout-note}
-If the sender writes back to a Done ticket, the app **reopens it automatically**, notes why in the ticket history, and shows it in **Current Tickets** again (the new reply is in your folders).
-:::
-
-# Ticket History {#sec-history}
-
-Click the **Ticket History** tab (1). Each ticket shows why it left Current Tickets (2): *Completed*, *Reassigned outside the selected scope*, *Moved elsewhere*, or *No longer found after successful reconciliation* (the app never claims an email was deleted). Open a historical ticket to read the emails, copy the Copilot prompt, see the assignment and notification history, or open the Outlook email if it can still be found. Opening it changes nothing.
-
-![Ticket History](images/44-ticket-history.png){fig-alt="Ticket History tab with reasons such as reassigned and completed"}
-
-| Reason | What it means |
-|---|---|
-| **Completed** | Finished with Mark Done (the emails are in the completion folder) |
-| **Reassigned outside the selected scope** | The emails are now in a staff member's folder that you do not watch |
-| **Moved elsewhere** | Someone moved the emails to another folder the app could find |
-| **No longer found after successful reconciliation** | The emails are not in any folder the app checks (for example moved to *Archive* or deleted by someone) |
-
-: History reasons {tbl-colwidths="[40,60]"}
-
-If an email comes back into your folders, its ticket returns to **Current Tickets** by itself at the next check. Use the filters (school, ID, sender, assignee, status, dates, reason) to find old tickets; the search box searches both Current Tickets and Ticket History.
-
-# Team Overview {#sec-overview}
-
-**Team Overview** in the left menu counts tickets per person. *Unassigned*, *Assigned* and *In Progress* come from emails confirmed in your folders at the last check; *Done* uses this computer's records in the chosen date range. Folders that are outside your selected folders are marked **not reconciled** — the overview is then not a complete team report.
-
-![Team Overview](images/45-team-overview.png){fig-alt="Team overview table with counts per staff member and notes"}
-
-::: {.callout-warning}
-## Several computers
-Each computer keeps its **own** database. Outlook folders are shared, so the **owner** (which folder the emails are in) is the same everywhere, but **notes, statuses and history are not shared** between computers. A colleague sees a ticket you assigned to them after their app checks their folder. Ticket numbers (T-000012) are local; the reference *ASR-XXXXXXXX* in the handoff email is the same on every computer.
-:::
-
-# If the original email can't be found {#sec-notfound}
-
-If a colleague deleted the email or moved it somewhere the app cannot see, **Open Outlook Reply** shows a red message (1). You can then click **Open new message to sender** (2). This opens a new email to the sender — it is not part of the original conversation.
-
-![Original email not found](images/31-email-not-found.png){fig-alt="Not found message with the Open new message to sender button"}
-
-# Create a ticket by hand {#sec-new}
-
-For a phone call or an email outside the watched folders, click **+ New** (1), fill in what you know (2), and click **Create Ticket**.
-
-![New ticket](images/32-new-ticket.png){fig-alt="The New Ticket form"}
-
-# SOP Templates {#sec-templates}
-
-**SOP Templates** in the left menu shows the approved SOP wording for each issue. The matching wording is added to the Copilot prompt automatically. You can edit a template; **Restore System Default** brings back the original text.
-
-![SOP Templates](images/33-sop-templates.png){fig-alt="The SOP Templates page"}
-
-# Reports and Export {#sec-reports}
-
-**Reports** shows how many tickets there are by status, issue and week. **Export CSV** (1) creates a file you can open in Excel (email text is not included).
-
-![Reports](images/34-reports.png){fig-alt="Reports page with the Export CSV button"}
-
-# Backup {#sec-backup}
-
-In **Settings › Database / Backup**:
-
-- **Back Up Database…** (1) saves a copy of all tickets.
-- **Restore From Backup…** (2) brings a copy back. The current data is saved first, just in case.
-
-![Backup and restore](images/35-backup.png){fig-alt="Back Up Database and Restore From Backup buttons"}
-
-# Troubleshooting {#sec-help}
-
-| What you see | What to do |
-|---|---|
-| *Outlook is not reachable* / *different permission levels* | Make sure classic Outlook is open. Close the app and start it again normally — **not** with *Run as administrator*. |
-| Mark Done says *Choose a completion folder* | Do [Choose the completion folder](#choose-the-completion-folder) in Settings. |
-| *Clipboard failed* | Click into the **Copilot Prompt Preview**, press <kbd>Ctrl</kbd>+<kbd>A</kbd> then <kbd>Ctrl</kbd>+<kbd>C</kbd> to copy it by hand. |
-| An email never became a ticket | Check the **Scanning:** line in Settings. The email's folder must be included. Then click **Check Now**. |
-| *The original email could not be found* | See [If the original email can't be found](#sec-notfound). |
-| Mark Done failed for one email | Fix the reason shown (for example open Outlook), then click **Retry Mark Done**. |
-| A ticket is missing from **Current Tickets** | Look in **Ticket History** (its emails may have been moved) and in **Awaiting Verification**. Clear the filters. |
-| Assignment says **Not finished** | An email could not be moved (for example no permission on the staff folder). Fix it, then click **Retry assignment**. |
-| **Assigned — notification failed** | Open Outlook or fix the reason shown, then click **Retry Notification**. |
-| **Notification outcome uncertain** | Click **Check Sent Items**. Only if it is not there, click **Send again…**. |
-| A person is missing in the Assign list | They are deactivated or have no email/folder. Fix it in **Settings › Staff Assignment**. |
-| **Ownership conflict** | The emails are in two staff folders. **Reassign** the ticket to the right person. |
-| **Team Overview** shows *not reconciled* | That staff folder is outside your selected folders, so its numbers are not checked from this computer. |
-| A colleague cannot see my notes | Notes, statuses and history are stored on each computer and are not shared. Only the Outlook folder (the owner) is shared. |
-
-: Common problems {tbl-colwidths="[40,60]"}
-
-Your tickets are stored on your computer in `%APPDATA%\gov.nj.doh.asrsupportdesk\`. Automatic backups are in its `backups` folder.
-
-# Quick reference {#sec-ref}
-
-| Button | Where | What it does |
-|---|---|---|
-| **Check Now** | Bottom left | Looks for new emails and updates Current Tickets / Ticket History |
-| **Current Tickets / Ticket History** | Tabs above the ticket list | Open work vs. earlier tickets |
-| **+ New** | Above the ticket list | Creates a ticket by hand |
-| **1. Copy Prompt** | Top of a ticket | Copies the text for Copilot |
-| **2. Open Outlook Reply** / **Reply All** | Top of a ticket | Opens Outlook's reply window (nothing is sent) |
-| **Copy Prompt & Open Outlook Reply** | Top of a ticket | Both of the above |
-| **3. Mark Done** / **Retry Mark Done** | Top of a ticket | Flags complete, moves the email, sets Done |
-| **Reopen** | Top of a Done ticket | Back to In Progress (or Unassigned); required before assigning |
-| **Assign / Reassign** | Top of a ticket | Moves the emails to a person's folder and emails them a handoff |
-| **Start Work** | Top of an Assigned ticket | Assigned → In Progress |
-| **Assign selected** | Above the ticket list | Assigns all ticked tickets to one person |
-| **Retry assignment / Retry Notification** | Assignment box | Finishes what failed, without repeating moves or emails |
-| **Check Sent Items / Send again…** | Assignment box | For an uncertain notification: look first, resend only if missing |
-| **Team Overview** | Left menu | Ticket counts per staff member |
-| **My Tickets / Unassigned** | Above the ticket list | Quick filters |
-| **✓ verify** | Under a field | Marks a value as checked |
-| **+ Add school** / **+ Add issue type…** | Ticket sections | Adds another school or issue |
-| **Clear Filters** | Above the ticket list | Removes all filters |
-
-: Buttons at a glance {tbl-colwidths="[32,25,43]"}
+| Test Outlook | A success message appears | Pass / Fail |
+| Click **Check Now** | A test email becomes a ticket | Pass / Fail |
+| Click **Claim** | You become the owner and Outlook does not change | Pass / Fail |
+| Assign to Aaron | The email moves to Aaron's test folder and one handoff email is sent | Pass / Fail |
+| Open a second app instance | The other user sees the ticket and owner | Pass / Fail |
+| Add a note | The note is shared | Pass / Fail |
+| Mark Done | The ticket appears in **Ticket History** | Pass / Fail |
+| Reopen the ticket | The ticket can be worked on again | Pass / Fail |
+| Disconnect and reconnect the test shared file | Local changes become shared after **Sync Now** | Pass / Fail |
+| Copy a Diagnostics log | A developer can read the problem report | Pass / Fail |
+
+For developer setup and two-instance testing, see `docs/UAT_CHECKLIST.md` and `docs/MULTIUSER_TESTING.md`.

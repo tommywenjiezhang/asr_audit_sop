@@ -28,13 +28,13 @@ What the app does in Outlook:
 
 Development/testing: two instances of the app can run side by side with separate profiles against the same shared database — see [docs/MULTIUSER_TESTING.md](docs/MULTIUSER_TESTING.md) (`scripts\launch_multiuser_test.ps1`, `node scripts\multiuser\run-tests.mjs`). Staff UAT: [docs/UAT_CHECKLIST.md](docs/UAT_CHECKLIST.md).
 
-For staff, the **illustrated step-by-step guide** is [docs/guide/ASR-Support-Desk-User-Guide.html](docs/guide/ASR-Support-Desk-User-Guide.html): one HTML file with a screenshot for every step, using fictional demo data. Rebuild it with `scripts\build-guide.ps1`. See [docs/USER_GUIDE.md](docs/USER_GUIDE.md) for the shorter text reference. See [docs/TEMPLATE_COVERAGE.md](docs/TEMPLATE_COVERAGE.md) for how each template maps to the SOP, and [docs/BUILD_WINDOWS.md](docs/BUILD_WINDOWS.md) for building.
+For staff, the **illustrated step-by-step guide** is [docs/guide/ASR-Support-Desk-User-Guide.html](docs/guide/ASR-Support-Desk-User-Guide.html): one HTML file with screenshots using fictional demo data. The simple text guide is [docs/USER_GUIDE.md](docs/USER_GUIDE.md), and the staff test sheet is [docs/UAT_CHECKLIST.md](docs/UAT_CHECKLIST.md). Rebuild the illustrated guide with `scripts\build-guide.ps1`. See [docs/TEMPLATE_COVERAGE.md](docs/TEMPLATE_COVERAGE.md) for template coverage and [docs/BUILD_WINDOWS.md](docs/BUILD_WINDOWS.md) for building.
 
 ---
 
 ## Status and verification
 
-### Shared team database release (1.1.0, phases P0.1–P0.3) — last verified 2026-11-18
+### Shared team database release (1.2.0, phases P0.1–P0.3) — last verified 2026-11-18
 
 | Area | Status |
 |---|---|

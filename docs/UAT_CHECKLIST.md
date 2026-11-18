@@ -1,44 +1,45 @@
-# Staff UAT Checklist — ASR/Audit Support Desk 1.2.0
+# How to Test the App
 
-Development testing (automated suites plus two app instances on one computer, see `MULTIUSER_TESTING.md`)
-is complete. UAT confirms what one computer cannot: real staff accounts, share permissions, separate Outlook
-profiles and real (test) mailbox messages. Record results in the last column.
+This is a short staff test. Use a test mailbox, test folders, and made-up email messages. Do not move, flag, or send real Outlook messages during testing.
 
-## Before starting
+## Before testing
 
-| Item | Notes | Done |
+1. Install the current release with a normal Windows account.
+2. Open classic Outlook.
+3. Open the app and complete **Settings**.
+4. Choose a test mailbox, test folders, and a test completion folder.
+5. Add two test staff members with test email addresses and test Outlook folders.
+6. Click **Save Settings**.
+
+## Test steps
+
+| What to do | What should happen | Result |
 |---|---|---|
-| 1.2.0 installed on each UAT computer (normal, non-admin account) | Installer in `Documents\ASR_Development_Build` | |
-| 64-bit Access driver; Modify permission on the share **folder** | Settings › Shared Database › Test Connection: Yes / Yes / Yes | |
-| Shared database schema v2 | Already upgraded on the development database. Another database: Settings › Shared Database › *Upgrade the shared database…* (everyone closed, verified backup first) | |
-| Designated **test** messages/folders in Outlook | Never assign or archive real cases during UAT | |
-| Staff records with email + Outlook folder; *I am* set on each computer | Settings › Staff Assignment | |
-| Completed folder chosen | Settings › Completion Folder | |
-| Local backup on each computer | Settings › Database / Backup | |
+| Test Outlook | A success message appears | Pass / Fail |
+| Click **Check Now** | A test email becomes a ticket | Pass / Fail |
+| Click **Claim** | You become the owner; Outlook does not change | Pass / Fail |
+| Assign the ticket to Aaron | The email moves to Aaron's test folder and one handoff email is sent | Pass / Fail |
+| Open a second app instance | The second user sees the ticket and its owner | Pass / Fail |
+| Add a note | The note is saved and appears for the other user | Pass / Fail |
+| Use **Kanban** | The ticket appears in the correct status column | Pass / Fail |
+| Open **Team Overview** | Workload and pending work are shown | Pass / Fail |
+| Change the same field in both instances | A conflict appears in **Conflicts** | Pass / Fail |
+| Choose **Keep shared value** | The conflict closes with the shared value | Pass / Fail |
+| Mark the ticket Done | The ticket appears in **Ticket History** | Pass / Fail |
+| Reopen the ticket | The ticket can be worked on again | Pass / Fail |
+| Make the shared file unavailable | The app reports the problem and keeps local changes pending | Pass / Fail |
+| Restore the shared file and click **Sync Now** | The pending change is shared | Pass / Fail |
+| Open **Diagnostics** and click **Copy Log** | A log can be copied for the developer | Pass / Fail |
 
-## Scenarios
+## Two instances on one computer
 
-| # | Scenario | Expected | Result |
-|---|---|---|---|
-| 1 | Same test email checked on two computers | One case on both, same ASR reference | |
-| 2 | Claim on one computer | Other computer shows the owner; nothing moved in Outlook, no email sent | |
-| 3 | Both claim the same case | One owner; the other sees a conflict naming the owner | |
-| 4 | Take over | New owner on both; ownership history keeps the earlier owner | |
-| 5 | **Assign** to a colleague | Emails move to the colleague's folder; ONE handoff email to the colleague (ticket, schools, issues, summary, previous/new owner, email location) | |
-| 6 | Two people Assign the same case at once | Only one runs; the other gets "already running … on <computer>"; one handoff only | |
-| 7 | Reassign | Emails move again; one new handoff; history shows both periods | |
-| 8 | Mark Done (online) | Done at once; covered emails flagged complete and moved to Completed | |
-| 9 | Mark Done while the share is unreachable | Done saved locally; after reconnecting the emails are archived automatically | |
-| 10 | Reply to a Done case | Case moves to Review on both computers | |
-| 11 | Related cases panel | Suggestions show reasons; Link keeps cases separate | |
-| 12 | Combine cases (preview) | One case keeps all emails, notes, schools; old reference still opens it | |
-| 13 | Move an email to another case | Email appears in the other case on both computers | |
-| 14 | Kanban drag | Status changes through the normal checks; colleague sees it | |
-| 15 | Bulk Claim / Start / Mark Done | Per-case results; Retry failed only reruns failures | |
-| 16 | Same field edited on both computers | Conflicts page shows both values; Keep shared / Use my value resolves it | |
-| 17 | Read-only share permission | Readable, not writable; own changes stay pending | |
-| 18 | Diagnostics | Test Database / Outlook Connection, Sync Now, Check Shared Integrity, Export Log (no personal data in the file) | |
-| 19 | Team Overview | Workload, older/stale cases, pending Outlook work, conflicts, staff activity | |
-| 20 | Restart both apps with pending changes | Changes sent once after restart | |
+For developer testing, use `scripts\launch_multiuser_test.ps1` to start two instances with separate local profiles. Point both instances to the same test shared file. Do not point the test instances at the production shared file.
 
-Use Diagnostics › Copy Log / Export Log as evidence for any failure.
+## If a test fails
+
+1. Read the message in the app.
+2. Open **Diagnostics**.
+3. Click **Copy Log** or **Export Log to File...**.
+4. Send the log and the failed test number to the developer.
+
+The two-instance test does not replace later testing with separate staff accounts, separate Outlook profiles, and a test network share.
