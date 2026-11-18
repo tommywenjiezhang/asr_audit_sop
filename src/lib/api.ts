@@ -121,6 +121,11 @@ export interface SharedStatus {
 }
 export interface ImportPreview { local_only: number; with_message_id: number; without_message_id: number; done: number; open: number; staff: number; already_shared?: number | null; held_ops: number }
 export interface DiagEvent { id: number; at: string; severity: "info" | "warning" | "error"; component: string; code?: string | null; summary: string; detail?: string | null; correlation?: string | null }
+export interface DiagHeader {
+  app_version: string; local_schema: number; shared_mode: string; shared_state: string; shared_database?: string | null; shared_environment?: string | null;
+  shared_schema?: number | null; last_success_at?: string | null; pending: number; held: number; conflicts: number; failed: number; driver?: string | null; device: string;
+}
+export interface DiagOverview { header: DiagHeader; latest_error_id?: number | null; log_dir: string }
 export const SYNC_LABEL: Record<SyncState, string> = { local: "Local only", pending: "Saved locally — pending sync", synced: "Synced", conflict: "Conflict — review required", failed: "Failed — retry available" };
 export interface ListResult { rows: TicketSummary[]; total: number; counts: [string, number][] }
 export interface Unresolved { key: string; label: string; known: boolean }
@@ -271,6 +276,9 @@ export const api = {
   conflicts: (ticketId: number | null, includeResolved: boolean) => invoke<LocalConflict[]>("conflicts_list", { ticketId, includeResolved }),
   conflictAcceptShared: (conflictId: string) => invoke<void>("conflict_accept_shared", { conflictId }),
   diagRecent: (minSeverity: string, limit: number) => invoke<DiagEvent[]>("diag_recent", { minSeverity, limit }),
+  diagOverview: () => invoke<DiagOverview>("diag_overview"),
+  diagCopyText: (ids: number[] | null, minSeverity: string) => invoke<string>("diag_copy_text", { ids, minSeverity }),
+  diagReport: (component: string, code: string, summary: string) => invoke<void>("diag_report", { component, code, summary }),
 };
 
 // ------------------------------------------------------------ helpers

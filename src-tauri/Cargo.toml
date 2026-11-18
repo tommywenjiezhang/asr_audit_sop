@@ -1,6 +1,6 @@
 [package]
 name = "asr-support-desk"
-version = "1.0.0"
+version = "1.1.0"
 description = "ASR/Audit Support Desk - Outlook email monitor and ticket manager"
 edition = "2021"
 rust-version = "1.80"

@@ -63,7 +63,8 @@ pub async fn ticket_create(state: State<'_, AppState>, input: NewTicket) -> AppR
 #[tauri::command]
 pub async fn ticket_update(state: State<'_, AppState>, id: i64, patch: TicketPatch) -> AppResult<tickets::Ticket> {
     let a = actor(&state);
-    let t = tickets::update(&state.db.lock().unwrap(), id, &patch, &a)?;
+    let r = tickets::update(&state.db.lock().unwrap(), id, &patch, &a);
+    let t = op_failed(&state, "Save", id, r)?;
     sync::nudge_shared(&state);
     Ok(t)
 }
@@ -71,7 +72,8 @@ pub async fn ticket_update(state: State<'_, AppState>, id: i64, patch: TicketPat
 #[tauri::command]
 pub async fn ticket_set_field(state: State<'_, AppState>, id: i64, key: String, value: Option<String>, verified: bool) -> AppResult<TicketField> {
     let a = actor(&state);
-    let f = tickets::set_field(&state.db.lock().unwrap(), id, &key, value, verified, &a)?;
+    let r = tickets::set_field(&state.db.lock().unwrap(), id, &key, value, verified, &a);
+    let f = op_failed(&state, "Save field", id, r)?;
     sync::nudge_shared(&state);
     Ok(f)
 }
@@ -133,7 +135,8 @@ pub async fn ticket_reopen(state: State<'_, AppState>, id: i64) -> AppResult<tic
 #[tauri::command]
 pub async fn ticket_claim(state: State<'_, AppState>, id: i64, takeover: bool) -> AppResult<tickets::Ticket> {
     let a = actor(&state);
-    let t = crate::workflow::claim(&state.db.lock().unwrap(), id, &a, takeover)?;
+    let r = crate::workflow::claim(&state.db.lock().unwrap(), id, &a, takeover);
+    let t = op_failed(&state, if takeover { "Take over" } else { "Claim" }, id, r)?;
     sync::nudge_shared(&state);
     Ok(t)
 }
@@ -327,7 +330,8 @@ fn shared_bound(state: &AppState) -> bool {
 pub async fn ticket_complete(state: State<'_, AppState>, id: i64) -> AppResult<MarkDoneResult> {
     let _guard = busy(&state.completing, id)?;
     let a = actor(&state);
-    let decision = crate::workflow::mark_done(&state.db.lock().unwrap(), id, &a)?;
+    let r = crate::workflow::mark_done(&state.db.lock().unwrap(), id, &a);
+    let decision = op_failed(&state, "Mark Done", id, r)?;
     sync::nudge_shared(&state);
     if shared_bound(&state) {
         return Ok(MarkDoneResult { decision, outlook: None, outlook_message: "Outlook was not changed yet. After the shared database confirms the Done decision, use Archive in Outlook to flag and move the covered emails.".into() });
@@ -878,9 +882,12 @@ async fn run_moves(state: &AppState, op_id: i64) -> AppResult<(bool, Vec<crate::
         Ok(data) => {
             let results: Vec<a::MoveResult> = serde_json::from_value(data.get("items").cloned().unwrap_or_default())?;
             let failures = a::apply_moves(&conn, op_id, &current, &pending, &results)?;
+            crate::diag::record(&conn, if failures.is_empty() { crate::diag::Severity::Info } else { crate::diag::Severity::Warning }, "outlook-action", if failures.is_empty() { "MOVE_OK" } else { "MOVE_PARTIAL" },
+                &format!("Assignment move for {}: {} requested, {} failed", tickets::display_id(op.ticket_id), pending.len(), failures.len()), &failures.iter().map(|f| f.error.clone()).collect::<Vec<_>>().join(" | "), &format!("assignment op {op_id}"));
             Ok((a::get_op(&conn, op_id)?.state == "done", failures))
         }
         Err(e) => {
+            crate::diag::record(&conn, crate::diag::Severity::Error, "outlook-action", e.code(), &format!("Assignment move for {} failed: {e}", tickets::display_id(op.ticket_id)), "", &format!("assignment op {op_id}"));
             a::record_worker_failure(&conn, op_id, &pending, &e.to_string())?;
             Ok((false, pending.iter().map(|m| a::MoveFailure { message_id: m.message_id, subject: m.subject.clone(), error: e.to_string() }).collect()))
         }
@@ -915,8 +922,14 @@ async fn send_notice(state: &AppState, op_id: i64) -> AppResult<(String, Option<
         },
     };
     let conn = state.db.lock().unwrap();
+    let (sev, code) = match &outcome {
+        NotifyOutcome::Submitted { .. } => (crate::diag::Severity::Info, "HANDOFF_SUBMITTED"),
+        NotifyOutcome::Uncertain(_) => (crate::diag::Severity::Warning, "HANDOFF_UNCERTAIN"),
+        NotifyOutcome::Failed(_) => (crate::diag::Severity::Error, "HANDOFF_FAILED"),
+    };
     a::record_notification(&conn, op_id, outcome)?;
     let op = a::get_op(&conn, op_id)?;
+    crate::diag::record(&conn, sev, "outlook-action", code, &format!("Handoff notification for {}: {}", tickets::display_id(op.ticket_id), op.notify_state), op.notify_error.as_deref().unwrap_or(""), &format!("assignment op {op_id}"));
     Ok((op.notify_state, op.notify_error))
 }
 
@@ -1043,7 +1056,8 @@ pub async fn notification_resend(state: State<'_, AppState>, op_id: i64) -> AppR
 #[tauri::command]
 pub async fn ticket_start_work(state: State<'_, AppState>, id: i64) -> AppResult<tickets::Ticket> {
     let a = actor(&state);
-    let t = crate::workflow::start_work(&state.db.lock().unwrap(), id, &a)?;
+    let r = crate::workflow::start_work(&state.db.lock().unwrap(), id, &a);
+    let t = op_failed(&state, "Start Work", id, r)?;
     sync::nudge_shared(&state);
     Ok(t)
 }
@@ -1234,7 +1248,8 @@ pub async fn shared_create_database(state: State<'_, AppState>, path: String, na
 #[tauri::command]
 pub async fn notes_add(state: State<'_, AppState>, ticket_id: i64, body: String) -> AppResult<crate::notes::Note> {
     let a = actor(&state);
-    let n = crate::notes::add(&state.db.lock().unwrap(), ticket_id, &body, &a)?;
+    let r = crate::notes::add(&state.db.lock().unwrap(), ticket_id, &body, &a);
+    let n = op_failed(&state, "Add note", ticket_id, r)?;
     sync::nudge_shared(&state);
     Ok(n)
 }
@@ -1272,6 +1287,52 @@ pub async fn conflict_accept_shared(state: State<'_, AppState>, conflict_id: Str
 #[tauri::command]
 pub async fn diag_recent(state: State<'_, AppState>, min_severity: Option<String>, limit: Option<i64>) -> AppResult<Vec<crate::diag::DiagEvent>> {
     Ok(crate::diag::recent(&state.db.lock().unwrap(), min_severity.as_deref().unwrap_or("info"), limit.unwrap_or(500))?)
+}
+
+#[derive(Serialize)]
+pub struct DiagOverview {
+    pub header: crate::diag::DiagHeader,
+    pub latest_error_id: Option<i64>,
+    pub log_dir: String,
+}
+
+#[tauri::command]
+pub async fn diag_overview(state: State<'_, AppState>) -> AppResult<DiagOverview> {
+    let snap = state.shared.snapshot();
+    let conn = state.db.lock().unwrap();
+    Ok(DiagOverview {
+        header: crate::diag::header(&conn, &state.app_version, Some(&snap)),
+        latest_error_id: crate::diag::latest_error(&conn),
+        log_dir: state.data_dir.join("logs").to_string_lossy().to_string(),
+    })
+}
+
+/// Plain text to copy (whole filtered log, or the selected events). Redacted again before leaving.
+#[tauri::command]
+pub async fn diag_copy_text(state: State<'_, AppState>, ids: Option<Vec<i64>>, min_severity: Option<String>) -> AppResult<String> {
+    let snap = state.shared.snapshot();
+    let conn = state.db.lock().unwrap();
+    let h = crate::diag::header(&conn, &state.app_version, Some(&snap));
+    Ok(crate::diag::copy_text(&conn, &h, ids.as_deref(), min_severity.as_deref().unwrap_or("info"), 1000))
+}
+
+/// The UI reports its own problems here (e.g. the clipboard was unavailable). Never fails.
+#[tauri::command]
+pub async fn diag_report(state: State<'_, AppState>, component: String, code: String, summary: String) -> AppResult<()> {
+    if let Ok(conn) = state.db.lock() {
+        crate::diag::record(&conn, crate::diag::Severity::Warning, &component.chars().take(40).collect::<String>(), &code.chars().take(40).collect::<String>(), &summary.chars().take(500).collect::<String>(), "", "");
+    }
+    Ok(())
+}
+
+/// Record a failed ticket operation in Diagnostics (the error itself is still returned to the UI).
+fn op_failed<T>(state: &AppState, op: &str, id: i64, r: AppResult<T>) -> AppResult<T> {
+    if let Err(e) = &r {
+        if let Ok(conn) = state.db.lock() {
+            crate::diag::record(&conn, crate::diag::Severity::Warning, "ticket", e.code(), &format!("{op} failed for {}: {e}", tickets::display_id(id)), "", &tickets::display_id(id));
+        }
+    }
+    r
 }
 
 #[tauri::command]

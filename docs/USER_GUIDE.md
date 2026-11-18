@@ -227,6 +227,19 @@ Problems:
 
 ---
 
+## 6b. Diagnostics (when something does not work)
+
+Left menu › **Diagnostics** (also **Open Diagnostics** in Settings › Shared Database).
+
+- The top shows the app version, the shared database state, the last successful sync and how many changes are waiting.
+- The list shows recent technical events: start-up, shared database checks (with codes such as `SHARE_UNAVAILABLE`, `DB_FILE_NOT_FOUND`, `DB_PERMISSION_DENIED`, `DB_READ_ONLY`, `DB_LOCKED`, `ACCESS_DRIVER_MISSING`, `ACCESS_DRIVER_ARCH_MISMATCH`, `DB_MAINTENANCE`, `DB_IDENTITY_CHANGED`), synchronization results, Outlook checks and Outlook actions. Click an event to see its details.
+- **Errors only / Warnings and errors** filters the list; **Go to latest error** jumps to the newest error.
+- **Copy Log** copies the filtered list as plain text; tick events and use **Copy Selected** for just those. Paste it into an email or Teams message to the developer. If the clipboard is blocked, the text is shown so you can copy it by hand.
+- Email addresses, phone numbers, school and NJIIS IDs, subjects, Windows user names and connection strings are removed before anything is saved or copied. Email text and Copilot prompts are never logged. Diagnostics are kept on this computer (the most recent few thousand events) and are separate from the case history.
+- A problem with Diagnostics itself never stops you from saving or synchronizing.
+
+---
+
 ## 7. What the app does and does not do in Outlook
 
 | Action | When |

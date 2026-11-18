@@ -124,6 +124,22 @@ Release builds use `opt-level = "s"`, LTO and `codegen-units = 1`. A clean relea
 
 ---
 
+## 4a. Shared database (Access) tests
+
+The shared-database code uses the `odbc-api` crate and links `odbc32.dll` / `odbccp32.dll` (always present on Windows). The 64-bit **Microsoft Access Database Engine** is needed only to run the real-driver tests and to use the shared database at run time; the build itself does not need it.
+
+```powershell
+. scripts\env.ps1; cd src-tauri
+$env:ASR_ACCESS_TEST_DIR = "$env:LOCALAPPDATA\asr-access-test"      # a LOCAL test folder (never the production share)
+New-Item -ItemType Directory -Force $env:ASR_ACCESS_TEST_DIR | Out-Null
+cargo test --no-default-features -- --ignored access_ diag_reproduce --nocapture   # driver-specific checks
+$env:ASR_SHARED_BACKEND = "access"                                    # run the multi-workstation scenarios on real .accdb files
+cargo test --no-default-features -- --test-threads=1 shared_ workflow:: diag::
+Remove-Item Env:ASR_SHARED_BACKEND
+```
+
+Each test creates its own new `.accdb` in that folder; delete the folder afterwards. `diag_reproduce` temporarily adds and removes an NTFS *deny* entry for the current user on a sub-folder it created.
+
 ## 5. What `build.ps1` does, step by step
 
 You can run each step by hand, for example when adapting the process to another app.
