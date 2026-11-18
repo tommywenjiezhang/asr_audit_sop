@@ -693,7 +693,8 @@ pub async fn settings_save(app: AppHandle, state: State<'_, AppState>, settings:
     }
     settings.save(&state.settings_path)?;
     *state.settings.write().unwrap() = settings.clone();
-    if old.launch_at_login != settings.launch_at_login {
+    // test-mode instances never register autostart (the plugin is not loaded there)
+    if old.launch_at_login != settings.launch_at_login && !crate::profile::test_mode() {
         use tauri_plugin_autostart::ManagerExt;
         let al = app.autolaunch();
         let r = if settings.launch_at_login { al.enable() } else { al.disable() };

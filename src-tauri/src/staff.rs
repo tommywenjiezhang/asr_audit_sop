@@ -215,10 +215,54 @@ pub fn set_current_staff_id(conn: &Connection, id: Option<i64>) -> AppResult<()>
     set_setting(conn, "current_staff_id", &id.map(|i| i.to_string()).unwrap_or_default())
 }
 
+/// Development test mode (ASR_TEST_STAFF): make sure a staff member with this name exists on this computer
+/// and is selected as "I am". Uses a non-routable `example.invalid` address; in mock-Outlook mode a mock
+/// folder with the same name is mapped as the staff folder. Never changes an existing "I am" choice.
+pub fn ensure_test_identity(conn: &Connection, name: &str) -> AppResult<i64> {
+    if let Some(id) = current_staff_id(conn)? {
+        if get(conn, id).is_ok() {
+            return Ok(id);
+        }
+    }
+    let existing: Option<i64> = conn.query_row("SELECT id FROM staff WHERE lower(display_name)=lower(?1) ORDER BY active DESC, id LIMIT 1", [name.trim()], |r| r.get(0)).optional()?;
+    let id = match existing {
+        Some(id) => id,
+        None => {
+            let slug: String = name.chars().filter(|c| c.is_ascii_alphanumeric()).collect::<String>().to_lowercase();
+            let mut input = StaffInput { display_name: name.trim().into(), email: format!("{}@example.invalid", if slug.is_empty() { "test.staff".into() } else { slug }), ..Default::default() };
+            if let crate::profile::OutlookMode::Mock(_) = crate::profile::outlook_mode() {
+                let tree = crate::outlook_mock::default_tree();
+                if let Some(f) = tree["root"]["children"][0]["children"].as_array().and_then(|k| k.iter().find(|f| f["name"].as_str().map(|n| n.eq_ignore_ascii_case(name.trim())).unwrap_or(false))) {
+                    input.store_id = crate::outlook_mock::STORE.into();
+                    input.folder_entry_id = f["entry_id"].as_str().unwrap_or("").into();
+                    input.folder_path = f["path"].as_str().unwrap_or("").into();
+                    input.mailbox_name = "Mock Shared Mailbox".into();
+                }
+            }
+            save(conn, &input)?.id
+        }
+    };
+    set_current_staff_id(conn, Some(id))?;
+    Ok(id)
+}
+
 #[cfg(test)]
 pub mod tests {
     use super::*;
     use crate::db::open_in_memory;
+
+    #[test]
+    fn test_identity_is_created_once_and_never_replaces_a_choice() {
+        let c = open_in_memory().unwrap();
+        let a = ensure_test_identity(&c, "Test Staff A").unwrap();
+        assert_eq!(current_staff_id(&c).unwrap(), Some(a));
+        assert_eq!(get(&c, a).unwrap().email, "teststaffa@example.invalid");
+        assert_eq!(ensure_test_identity(&c, "Test Staff A").unwrap(), a, "idempotent");
+        // an explicit "I am" choice wins over the environment
+        let w = save(&c, &input("Wenjie", "w@example.org", "F-W")).unwrap();
+        set_current_staff_id(&c, Some(w.id)).unwrap();
+        assert_eq!(ensure_test_identity(&c, "Test Staff B").unwrap(), w.id);
+    }
 
     pub fn input(name: &str, email: &str, folder: &str) -> StaffInput {
         StaffInput {

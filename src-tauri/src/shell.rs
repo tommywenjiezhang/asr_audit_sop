@@ -98,17 +98,56 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+/// Startup problems before a window exists: stderr plus a text file in %TEMP% (the app never silently
+/// falls back to another profile).
+fn fatal(msg: &str) -> ! {
+    eprintln!("ASR/Audit Support Desk could not start: {msg}");
+    let _ = std::fs::write(std::env::temp_dir().join("asr-support-desk-startup-error.txt"), msg);
+    std::process::exit(2);
+}
+
+/// The main window, created here (not from the config) so a profile can give it its own WebView2 data
+/// folder and, in test mode, a remote-debugging port for the dual-instance UI driver.
+fn create_main_window(app: &tauri::App, profile: &crate::profile::Profile) -> tauri::Result<()> {
+    let Some(cfg) = app.config().app.windows.iter().find(|w| w.label == "main").cloned() else { return Ok(()) };
+    let mut b = tauri::WebviewWindowBuilder::from_config(app.handle(), &cfg)?;
+    if let Some(d) = &profile.data_dir {
+        b = b.data_directory(d.join("webview"));
+    }
+    if profile.test_mode {
+        let title = if profile.name.is_empty() { format!("{} [TEST MODE]", cfg.title) } else { format!("{} [TEST: {}]", cfg.title, profile.name) };
+        b = b.title(title);
+        if let Some(port) = profile.devtools_port {
+            // Tauri's default WebView2 arguments plus the debugging port (localhost only)
+            b = b.additional_browser_args(&format!("--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --remote-debugging-port={port}"));
+        }
+    }
+    b.build()?;
+    Ok(())
+}
+
 pub fn run() {
     let started = std::time::Instant::now();
-    tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main(app)))
-        .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, Some(vec!["--minimized"])))
+    let pre = crate::profile::from_env(None).unwrap_or_else(|e| fatal(&e));
+    let mut builder = tauri::Builder::default();
+    if !pre.multi_instance() {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main(app)));
+    }
+    builder = builder.plugin(tauri_plugin_dialog::init());
+    if !pre.test_mode {
+        builder = builder.plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, Some(vec!["--minimized"])));
+    }
+    builder
         .setup(move |app| {
-            let data_dir = app.path().app_data_dir()?;
+            let data_dir = match &pre.data_dir {
+                Some(d) => d.clone(),
+                None => app.path().app_data_dir()?,
+            };
             std::fs::create_dir_all(&data_dir)?;
+            let profile = crate::profile::install(crate::profile::from_env(Some(&data_dir)).unwrap_or_else(|e| fatal(&e)));
             let guard = init_logging(&data_dir.join("logs"));
-            tracing::info!(version = %app.package_info().version, "starting ASR/Audit Support Desk");
+            tracing::info!(version = %app.package_info().version, data_dir = %data_dir.display(), test_mode = profile.test_mode, outlook = ?profile.outlook, "starting ASR/Audit Support Desk");
+            create_main_window(app, profile)?;
 
             let settings_path = data_dir.join("settings.json");
             let settings = Settings::load(&settings_path);
@@ -118,7 +157,13 @@ pub fn run() {
             crate::sync_queue::set_mode(&conn, &settings.shared_mode).map_err(|e| e.to_string())?;
             let version = app.package_info().version.to_string();
             crate::diag::record(&conn, crate::diag::Severity::Info, "startup", "APP_START",
-                &format!("ASR/Audit Support Desk {version} started; local schema v{}; shared mode {}", db::schema_version(&conn).unwrap_or(0), settings.shared_mode), "", "");
+                &format!("ASR/Audit Support Desk {version} started; local schema v{}; shared mode {}{}", db::schema_version(&conn).unwrap_or(0), settings.shared_mode,
+                    if profile.test_mode { format!("; TEST MODE profile \"{}\", Outlook {}", profile.name, if matches!(profile.outlook, crate::profile::OutlookMode::Live) { "LIVE" } else { "mock" }) } else { String::new() }), "", "");
+            if let Some(name) = &profile.test_staff {
+                if let Err(e) = crate::staff::ensure_test_identity(&conn, name) {
+                    tracing::warn!(error = %e, "test staff identity could not be prepared");
+                }
+            }
             // pre-select "who am I" from the Windows account when nothing is chosen yet
             if crate::staff::current_staff_id(&conn).ok().flatten().is_none() {
                 if let Ok(Some(id)) = crate::staff::match_windows_account(&conn, &crate::sync_queue::windows_account()) {
