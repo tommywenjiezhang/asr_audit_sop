@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { api, debounce, errMsg, fmtDate, HISTORY_REASONS, localDayStart, reasonLabel, statusText, type ListQuery, type ScopeStatus, type Staff, type TicketSummary } from "../lib/api";
+  import { api, debounce, errMsg, fmtDate, HISTORY_REASONS, localDayStart, reasonLabel, statusText, SYNC_LABEL, type ListQuery, type ScopeStatus, type Staff, type TicketSummary } from "../lib/api";
   import { app, issueName, toast } from "../lib/stores.svelte";
   import TicketDetail from "../components/TicketDetail.svelte";
   import NewTicketDialog from "../components/NewTicketDialog.svelte";
@@ -8,7 +8,7 @@
 
   type View = "current" | "unverified" | "history";
   const PAGE = 100;
-  const blank = { search: "", status: "", assignee: "", issue: "", recFrom: "", recTo: "", compFrom: "", compTo: "", asgFrom: "", asgTo: "", age: 0, reason: "", school: "", sender: "", sort: "received" };
+  const blank = { search: "", status: "", assignee: "", issue: "", recFrom: "", recTo: "", compFrom: "", compTo: "", asgFrom: "", asgTo: "", age: 0, reason: "", school: "", sender: "", sort: "received", sync: "" };
   let view = $state<View>("current");
   let f = $state({ ...blank });
   let rows = $state<TicketSummary[]>([]);
@@ -33,7 +33,7 @@
 
   function query(offset: number): ListQuery {
     return {
-      view, status: f.status, assignee: f.assignee, search: f.search, issue_type: f.issue, sort: f.sort, limit: PAGE, offset,
+      view, status: f.status, assignee: f.assignee, search: f.search, issue_type: f.issue, sort: f.sort, limit: PAGE, offset, sync: f.sync,
       reason: view === "history" ? f.reason : "", school: f.school, sender: f.sender, min_age_days: Number(f.age) || 0,
       // local midnight of the start date .. local midnight after the end date: end dates are inclusive
       received_from: f.recFrom ? localDayStart(f.recFrom) : "", received_to: f.recTo ? localDayStart(f.recTo, 1) : "",
@@ -60,7 +60,7 @@
 
   $effect(() => {
     void view; void f.status; void f.assignee; void f.issue; void f.recFrom; void f.recTo; void f.compFrom; void f.compTo;
-    void f.asgFrom; void f.asgTo; void f.age; void f.reason; void f.sort; void app.ticketsVersion; void app.sync?.running;
+    void f.asgFrom; void f.asgTo; void f.age; void f.reason; void f.sort; void f.sync; void app.ticketsVersion; void app.sync?.running;
     load();
   });
 
@@ -142,6 +142,10 @@
         </select>
       </div>
       {#if more}
+        <select bind:value={f.sync} title="Shared database state">
+          <option value="">Any sync state</option><option value="attention">Needs attention (pending, conflict, failed)</option>
+          <option value="pending">Pending sync</option><option value="conflict">Conflict — review required</option><option value="failed">Failed — retry available</option>
+        </select>
         <select bind:value={f.issue} title="Issue type">
           <option value="">All issue types</option>
           {#each app.catalog?.issue_types ?? [] as it}<option value={it.id}>{it.name}</option>{/each}
@@ -194,6 +198,9 @@
               {#if t.low_confidence}<span class="badge warn" title="Issue type guessed with low confidence">check type</span>{/if}
               {#if t.possible_duplicate_of}<span class="badge warn" title="Possible duplicate">dup?</span>{/if}
               {#if t.needs_review}<span class="badge warn" title="Needs review">review</span>{/if}
+              {#if t.sync_state === "pending"}<span class="badge grey" title={SYNC_LABEL.pending}>⟳ pending</span>
+              {:else if t.sync_state === "conflict"}<span class="badge err" title={SYNC_LABEL.conflict}>conflict</span>
+              {:else if t.sync_state === "failed"}<span class="badge err" title={SYNC_LABEL.failed}>sync failed</span>{/if}
               <span class="grow"></span>
               <span class="muted small">{fmtDate(t.first_received_at)}</span>
             </div>

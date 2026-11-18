@@ -4,6 +4,9 @@
   import { api, errMsg, fmtDate, type AppInfo, type FolderNode, type Settings, type Staff, type StaffInput } from "../lib/api";
   import { app, toast } from "../lib/stores.svelte";
   import FolderTree from "../components/FolderTree.svelte";
+  import SharedDatabasePanel from "../components/SharedDatabasePanel.svelte";
+
+  let { onopendiagnostics }: { onopendiagnostics?: () => void } = $props();
 
   let s = $state<Settings | null>(null);
   let info = $state<AppInfo | null>(null);
@@ -123,7 +126,7 @@
     if (r && s.archive_folder) s.archive_folder.path = r.path;
   }
   // ---- staff assignment (stored in SQLite, saved per person - not with "Save Settings")
-  const emptyStaff = (): StaffInput => ({ id: null, display_name: "", email: "", mailbox_name: "", store_id: "", folder_entry_id: "", folder_path: "" });
+  const emptyStaff = (): StaffInput => ({ id: null, display_name: "", email: "", mailbox_name: "", store_id: "", folder_entry_id: "", folder_path: "", windows_account: "" });
   let staffRows = $state<Staff[]>([]);
   let me = $state<number | null>(null);
   let editing = $state<StaffInput | null>(null);
@@ -149,7 +152,6 @@
   async function saveStaff() {
     if (!editing) return;
     if (!EMAIL_RE.test(editing.email.trim())) { staffMsg = { ok: false, text: "Enter a valid email address." }; return; }
-    if (!editing.folder_entry_id) { staffMsg = { ok: false, text: "Choose the staff member's Outlook folder." }; return; }
     const r = await step("staffsave", () => api.staffSave($state.snapshot(editing) as StaffInput));
     if (r) { staffMsg = { ok: true, text: `Saved ${r.display_name}.` }; editing = null; staffTree = null; await loadStaff(); }
   }
@@ -198,6 +200,8 @@
 {#if s}
   <div class="scroll page">
     <div class="row"><h2 style="margin:0">Settings</h2><span class="grow"></span><button class="primary" disabled={!!busy} onclick={saveSettings}>Save Settings</button></div>
+
+    <SharedDatabasePanel {onopendiagnostics} />
 
     <section class="panel">
       <h3>Outlook Connection</h3>
@@ -321,7 +325,7 @@
 
     <section class="panel">
       <h3>Staff Assignment</h3>
-      <p class="small muted">Each staff member has a name, the email address that receives handoff notifications, and their own Outlook folder. Assigning a ticket moves its emails into that folder. A folder also covers its subfolders unless another staff member has a more specific folder. Staff are stored in this computer's database.</p>
+      <p class="small muted">Each staff member has a name, the email address that receives handoff notifications, and optionally their own Outlook folder (needed only for Assign/Reassign, which moves the emails into it). A folder also covers its subfolders unless another staff member has a more specific folder. Names, email addresses and Windows accounts are shared with the team through the shared database; Outlook folders are remembered on this computer only (they are specific to each Outlook profile). The Windows account only pre-selects "I am" on that person's computer; it is not a security control.</p>
       <table class="grid small">
         <thead><tr><th>Name</th><th>Email</th><th>Folder</th><th></th></tr></thead>
         <tbody>
@@ -329,9 +333,9 @@
             <tr class:inactive={!st.active}>
               <td>{st.display_name}{#if !st.active} <span class="badge grey">inactive</span>{/if}{#if me === st.id} <span class="badge">me</span>{/if}</td>
               <td>{st.email}</td>
-              <td>{st.mailbox_name ? `${st.mailbox_name} › ` : ""}{st.folder_path}</td>
+              <td>{#if st.folder_entry_id}{st.mailbox_name ? `${st.mailbox_name} › ` : ""}{st.folder_path}{:else}<span class="muted">no folder on this computer</span>{/if}{#if st.windows_account}<div class="muted">{st.windows_account}</div>{/if}</td>
               <td style="white-space:nowrap">
-                <button class="link small" onclick={() => { editing = { id: st.id, display_name: st.display_name, email: st.email, mailbox_name: st.mailbox_name ?? "", store_id: st.store_id, folder_entry_id: st.folder_entry_id, folder_path: st.folder_path }; staffMsg = null; }}>Edit</button>
+                <button class="link small" onclick={() => { editing = { id: st.id, display_name: st.display_name, email: st.email, mailbox_name: st.mailbox_name ?? "", store_id: st.store_id, folder_entry_id: st.folder_entry_id, folder_path: st.folder_path, windows_account: st.windows_account ?? "" }; staffMsg = null; }}>Edit</button>
                 {#if st.active}<button class="link small" onclick={() => setActive(st, false)}>Deactivate</button>{:else}<button class="link small" onclick={() => setActive(st, true)}>Reactivate</button>{/if}
               </td>
             </tr>
@@ -345,6 +349,7 @@
           <div class="field"><div class="lbl">Display name</div><input bind:value={editing.display_name} placeholder="e.g. Wenjie" /></div>
           <div class="field"><div class="lbl">Email address</div><div><input type="email" bind:value={editing.email} placeholder="name@doh.nj.gov" />
             {#if editing.email && !EMAIL_RE.test(editing.email.trim())}<div class="small" style="color:var(--err)">Not a valid email address</div>{/if}</div></div>
+          <div class="field"><div class="lbl">Windows account</div><div><input bind:value={editing.windows_account} placeholder="DOMAIN\username (optional)" /><div class="small muted">Pre-selects "I am" when this person opens the app on their computer.</div></div></div>
           <div class="field"><div class="lbl">Outlook folder</div>
             <div>
               <div class="row"><b class="small">{editing.folder_path ? `${editing.mailbox_name ? editing.mailbox_name + " › " : ""}${editing.folder_path}` : "not chosen"}</b>
@@ -361,7 +366,7 @@
         <div><select style="width:240px" value={me == null ? "" : String(me)} onchange={(e) => setMe((e.target as HTMLSelectElement).value)}>
           <option value="">— not set —</option>
           {#each staffRows.filter((x) => x.active) as st (st.id)}<option value={String(st.id)}>{st.display_name}</option>{/each}
-        </select><div class="small muted">Used by the My Tickets shortcut on this computer.</div></div></div>
+        </select><div class="small muted">Your stable staff identity on this computer: recorded as the author of your notes and changes, and used by My Tickets.</div></div></div>
       <div class="field"><div class="lbl">Send notifications from</div>
         <div><div class="row"><select style="width:300px" bind:value={s.notify_account}>
             <option value="">Outlook's default account</option>

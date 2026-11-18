@@ -180,8 +180,9 @@ pub fn build_prompt(conn: &Connection, ticket_id: i64, settings: &Settings) -> A
     p.push_str(t.staff_actions.as_deref().map(str::trim).filter(|s| !s.is_empty()).unwrap_or("None recorded"));
     p.push_str("\n\nSTAFF NOTES\n");
     let mut notes: Vec<String> = Vec::new();
-    if let Some(n) = t.internal_notes.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        notes.push(n.to_string());
+    // each staff note is its own record (shared between computers); legacy single-box notes were migrated
+    for n in crate::notes::list(conn, ticket_id)? {
+        notes.push(n.body.trim().to_string());
     }
     if let Some(n) = t.resolution_notes.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         notes.push(format!("Earlier resolution notes: {n}"));

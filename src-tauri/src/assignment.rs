@@ -565,7 +565,10 @@ pub fn build_notification(conn: &Connection, op_id: i64) -> AppResult<Notificati
     };
     h.push_str(&block("Handoff instructions", pre(op.note.as_deref())));
     h.push_str(&block("Staff actions already taken", pre(t.staff_actions.as_deref())));
-    h.push_str(&block("Staff notes", pre(t.internal_notes.as_deref())));
+    let note_text = crate::notes::list(conn, op.ticket_id)?.into_iter().map(|n| format!("{} ({})", n.body.trim(), n.author_name)).collect::<Vec<_>>().join("
+
+");
+    h.push_str(&block("Staff notes", pre(Some(note_text.as_str()))));
     let mut msgs = tickets::messages(conn, op.ticket_id)?;
     msgs.sort_by(|a, b| a.received_at.cmp(&b.received_at).then(a.id.cmp(&b.id)));
     let orig_idx = msgs.iter().position(|m| m.link_type == "original" || m.link_type == "manual").or_else(|| msgs.iter().position(|m| !m.is_internal));

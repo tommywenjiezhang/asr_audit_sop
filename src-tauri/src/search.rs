@@ -32,6 +32,14 @@ fn document(conn: &Connection, ticket_id: i64) -> AppResult<Option<String>> {
         parts.push(catalog().issue(i).map(|d| d.name.clone()).unwrap_or_else(|| i.clone()));
     }
     parts.extend([sname, semail, subj, notes, actions, resolution].into_iter().flatten());
+    // stable reference and shared notes (each staff note is its own record)
+    if let Some(r) = conn.query_row("SELECT ticket_ref FROM tickets WHERE id=?1", [ticket_id], |r| r.get::<_, Option<String>>(0)).optional()?.flatten() {
+        parts.push(r);
+    }
+    let mut st = conn.prepare("SELECT body FROM ticket_notes WHERE ticket_id=?1 AND deleted=0")?;
+    for n in st.query_map([ticket_id], |r| r.get::<_, String>(0))? {
+        parts.push(n?);
+    }
     let mut st = conn.prepare("SELECT COALESCE(manual_value, extracted_value, '') FROM ticket_fields WHERE ticket_id=?1")?;
     for v in st.query_map([ticket_id], |r| r.get::<_, String>(0))? {
         parts.push(crate::render::display_value(&v?));

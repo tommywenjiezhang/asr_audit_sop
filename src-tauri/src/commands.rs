@@ -55,19 +55,25 @@ pub async fn ticket_detail(state: State<'_, AppState>, id: i64) -> AppResult<Tic
 #[tauri::command]
 pub async fn ticket_create(state: State<'_, AppState>, input: NewTicket) -> AppResult<i64> {
     let s = settings(&state);
-    tickets::create_manual(&state.db.lock().unwrap(), &input, &s, &actor(&state))
+    let id = tickets::create_manual(&state.db.lock().unwrap(), &input, &s, &actor(&state))?;
+    sync::nudge_shared(&state);
+    Ok(id)
 }
 
 #[tauri::command]
 pub async fn ticket_update(state: State<'_, AppState>, id: i64, patch: TicketPatch) -> AppResult<tickets::Ticket> {
     let a = actor(&state);
-    tickets::update(&state.db.lock().unwrap(), id, &patch, &a)
+    let t = tickets::update(&state.db.lock().unwrap(), id, &patch, &a)?;
+    sync::nudge_shared(&state);
+    Ok(t)
 }
 
 #[tauri::command]
 pub async fn ticket_set_field(state: State<'_, AppState>, id: i64, key: String, value: Option<String>, verified: bool) -> AppResult<TicketField> {
     let a = actor(&state);
-    tickets::set_field(&state.db.lock().unwrap(), id, &key, value, verified, &a)
+    let f = tickets::set_field(&state.db.lock().unwrap(), id, &key, value, verified, &a)?;
+    sync::nudge_shared(&state);
+    Ok(f)
 }
 
 /// Re-read one message's full body from Outlook (lazy, on demand).
@@ -97,7 +103,9 @@ pub async fn message_refresh(state: State<'_, AppState>, message_id: i64) -> App
 #[tauri::command]
 pub async fn ticket_set_issues(state: State<'_, AppState>, id: i64, issues: Vec<String>) -> AppResult<Vec<tickets::IssueRow>> {
     let a = actor(&state);
-    tickets::set_issues(&state.db.lock().unwrap(), id, &issues, &a)
+    let r = tickets::set_issues(&state.db.lock().unwrap(), id, &issues, &a)?;
+    sync::nudge_shared(&state);
+    Ok(r)
 }
 
 #[tauri::command]
@@ -545,9 +553,13 @@ pub async fn settings_get(state: State<'_, AppState>) -> AppResult<Settings> {
 
 #[tauri::command]
 pub async fn settings_save(app: AppHandle, state: State<'_, AppState>, settings: Settings) -> AppResult<Settings> {
-    let settings = settings.normalized();
-    settings.validate()?;
     let old = self::settings(&state);
+    let mut settings = settings.normalized();
+    // shared database settings have their own save (shared_save_config); a stale form never overwrites them
+    settings.shared_mode = old.shared_mode.clone();
+    settings.shared_db_path = old.shared_db_path.clone();
+    settings.shared_sync_minutes = old.shared_sync_minutes;
+    settings.validate()?;
     // a newly chosen completion folder must exist and be a mail folder
     if let Some(a) = settings.archive_folder.as_ref().filter(|a| old.archive_folder.as_ref() != Some(*a)) {
         let cfg = sync::worker_config(&state)?;
@@ -613,6 +625,9 @@ pub async fn db_restore(app: AppHandle, state: State<'_, AppState>, path: String
     {
         let mut conn = state.db.lock().unwrap();
         export::restore(&mut conn, &PathBuf::from(path), &safety)?;
+        // queued changes from the backup may be older than shared work: hold them for review, never replay
+        let held = crate::sync_queue::after_restore(&conn)?;
+        crate::diag::record(&conn, crate::diag::Severity::Warning, "backup", "RESTORED", &format!("Local backup restored; {held} queued change(s) held for review instead of being sent"), "", "");
     }
     use tauri::Emitter;
     let _ = app.emit("tickets-changed", ());
@@ -667,6 +682,8 @@ pub async fn staff_save(state: State<'_, AppState>, input: crate::staff::StaffIn
     let st = crate::staff::save(&conn, &input)?;
     // ownership is inferred from staff folders: re-evaluate with the new mapping (no notifications)
     crate::scope::recompute_all(&conn, "system")?;
+    drop(conn);
+    sync::nudge_shared(&state);
     Ok(st)
 }
 
@@ -953,6 +970,186 @@ pub async fn scope_status(state: State<'_, AppState>) -> AppResult<ScopeStatus> 
         history,
         unverified,
     })
+}
+
+// ------------------------------------------------------------------ shared database (Settings › Shared Database)
+
+#[tauri::command]
+pub async fn shared_status(state: State<'_, AppState>) -> AppResult<crate::shared_sync::SharedStatus> {
+    let mut s = state.shared.snapshot();
+    let conn = state.db.lock().unwrap();
+    let st = settings(&state);
+    s.mode = st.shared_mode.clone();
+    s.path = st.shared_db_path.clone();
+    if s.state.is_empty() {
+        s.state = if st.shared_mode == "standalone" { "standalone".into() } else { "not_checked".into() };
+    }
+    s.queue = crate::sync_queue::summary(&conn)?;
+    s.bound_database_id = crate::sync_queue::bound_db(&conn);
+    s.bound_database_name = crate::db::get_setting(&conn, "shared_db_name")?;
+    s.last_success_at = crate::db::get_setting(&conn, "shared_last_success_at")?;
+    s.app_schema_version = crate::shared_store::SHARED_SCHEMA_VERSION;
+    Ok(s)
+}
+
+/// Test Connection: reachable / readable / writable / identity / compatibility. Sends and receives nothing.
+#[tauri::command]
+pub async fn shared_test_connection(app: AppHandle) -> AppResult<crate::shared_sync::SharedStatus> {
+    sync::shared_run(&app, "test", false).await
+}
+
+#[tauri::command]
+pub async fn shared_sync_now(app: AppHandle) -> AppResult<crate::shared_sync::SharedStatus> {
+    sync::shared_run(&app, "manual", true).await
+}
+
+/// Save the per-workstation mode and path. A different path never re-targets queued changes: the
+/// identity check refuses a different database until staff explicitly switch.
+#[tauri::command]
+pub async fn shared_save_config(state: State<'_, AppState>, mode: String, path: String, minutes: Option<u32>) -> AppResult<Settings> {
+    crate::settings::validate_shared(&mode, &path)?;
+    let mut s = settings(&state);
+    s.shared_mode = mode.clone();
+    s.shared_db_path = path.trim().to_string();
+    if let Some(m) = minutes {
+        s.shared_sync_minutes = m;
+    }
+    s.validate()?;
+    s.save(&state.settings_path)?;
+    *state.settings.write().unwrap() = s.clone();
+    {
+        let conn = state.db.lock().unwrap();
+        crate::sync_queue::set_mode(&conn, &mode)?;
+        crate::diag::record(&conn, crate::diag::Severity::Info, "settings", "SHARED_CONFIG", &format!("Shared database settings saved: mode {mode}"), "", "");
+        *state.shared.status.lock().unwrap() = crate::shared_sync::compose_status(&conn, &s.shared_mode, &s.shared_db_path, None, None);
+    }
+    sync::nudge_shared(&state);
+    Ok(s)
+}
+
+/// Explicit review: submit changes that were made before the shared database identity was confirmed
+/// (or that were held after restoring a backup).
+#[tauri::command]
+pub async fn shared_release_held(state: State<'_, AppState>) -> AppResult<usize> {
+    let n = crate::sync_queue::release_held(&state.db.lock().unwrap())?;
+    sync::nudge_shared(&state);
+    Ok(n)
+}
+
+#[tauri::command]
+pub async fn shared_discard_held(state: State<'_, AppState>) -> AppResult<usize> {
+    crate::sync_queue::discard_held(&state.db.lock().unwrap())
+}
+
+/// Use the database now found at the configured path (identity changed). Requires a fresh check showing
+/// that identity; changes bound to the old database are isolated, never sent to the new one.
+#[tauri::command]
+pub async fn shared_switch_database(state: State<'_, AppState>, database_id: String) -> AppResult<usize> {
+    let snap = state.shared.snapshot();
+    let name = match (&snap.database_id, &snap.database_name) {
+        (Some(id), Some(n)) if *id == database_id => n.clone(),
+        _ => return Err(AppError::coded("STALE", "Run Test Connection first; the database identity must be confirmed before switching.")),
+    };
+    let conn = state.db.lock().unwrap();
+    let n = crate::sync_queue::rebind(&conn, &database_id, &name)?;
+    crate::diag::record(&conn, crate::diag::Severity::Warning, "shared-db", "DB_SWITCHED", &format!("Switched to shared database \"{name}\"; {n} change(s) for the previous database were isolated (not sent)."), "", &database_id);
+    Ok(n)
+}
+
+/// Import preview (dry run). With a reachable database it also counts cases that already exist there.
+#[tauri::command]
+pub async fn shared_import_preview(state: State<'_, AppState>) -> AppResult<crate::sync_queue::ImportPreview> {
+    let (mut p, imids) = {
+        let conn = state.db.lock().unwrap();
+        (crate::sync_queue::import_preview(&conn)?, crate::sync_queue::local_only_message_ids(&conn)?)
+    };
+    let path = std::path::PathBuf::from(settings(&state).shared_db_path.trim());
+    let r = tauri::async_runtime::spawn_blocking(move || -> crate::shared_store::SResult<i64> {
+        let mut c = crate::shared_store::open(&path, true)?;
+        crate::shared_store::identity(c.as_mut())?;
+        crate::shared_sync::import_dry_run(c.as_mut(), &imids)
+    });
+    if let Ok(Ok(Ok(n))) = tokio::time::timeout(Duration::from_secs(120), r).await {
+        p.already_shared = Some(n);
+    }
+    Ok(p)
+}
+
+/// Queue local-only cases for the shared database (restartable batches; duplicates are matched by the
+/// shared database, ambiguous ones are kept separate for review).
+#[tauri::command]
+pub async fn shared_import_run(state: State<'_, AppState>, limit: Option<usize>) -> AppResult<usize> {
+    let a = actor(&state);
+    let n = {
+        let conn = state.db.lock().unwrap();
+        let n = crate::sync_queue::queue_import(&conn, &a, limit.unwrap_or(500).clamp(1, 5000))?;
+        crate::diag::record(&conn, crate::diag::Severity::Info, "migration", "IMPORT_QUEUED", &format!("{n} local case(s) queued for the shared database"), "", "");
+        n
+    };
+    sync::nudge_shared(&state);
+    Ok(n)
+}
+
+/// Deliberate setup path: create a NEW shared database file (never overwrites; refuses existing files).
+#[tauri::command]
+pub async fn shared_create_database(state: State<'_, AppState>, path: String, name: String, environment: String) -> AppResult<crate::shared_store::DbIdentity> {
+    crate::settings::validate_shared("shared", &path)?;
+    if !["test", "production"].contains(&environment.as_str()) {
+        return Err(AppError::coded("INVALID", "Environment must be test or production."));
+    }
+    let who = format!("{} ({})", actor(&state), crate::sync_queue::windows_account());
+    let p = std::path::PathBuf::from(path.trim());
+    let name2 = name.trim().to_string();
+    let id = tauri::async_runtime::spawn_blocking(move || crate::shared_store::create_database(&p, &name2, &environment, &who))
+        .await
+        .map_err(|e| AppError::msg(e.to_string()))??;
+    crate::diag::record(&state.db.lock().unwrap(), crate::diag::Severity::Info, "shared-db", "DB_CREATED", &format!("New shared database \"{}\" ({}) created", id.display_name, id.environment), "", &id.database_id);
+    Ok(id)
+}
+
+// ------------------------------------------------------------------ notes / conflicts / diagnostics
+
+#[tauri::command]
+pub async fn notes_add(state: State<'_, AppState>, ticket_id: i64, body: String) -> AppResult<crate::notes::Note> {
+    let a = actor(&state);
+    let n = crate::notes::add(&state.db.lock().unwrap(), ticket_id, &body, &a)?;
+    sync::nudge_shared(&state);
+    Ok(n)
+}
+
+#[tauri::command]
+pub async fn notes_edit(state: State<'_, AppState>, note_id: String, body: String) -> AppResult<()> {
+    let a = actor(&state);
+    crate::notes::edit(&state.db.lock().unwrap(), &note_id, &body, &a)?;
+    sync::nudge_shared(&state);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn notes_delete(state: State<'_, AppState>, note_id: String) -> AppResult<()> {
+    let a = actor(&state);
+    crate::notes::delete(&state.db.lock().unwrap(), &note_id, &a)?;
+    sync::nudge_shared(&state);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn conflicts_list(state: State<'_, AppState>, ticket_id: Option<i64>, include_resolved: bool) -> AppResult<Vec<crate::sync_queue::LocalConflict>> {
+    crate::sync_queue::conflicts(&state.db.lock().unwrap(), ticket_id, include_resolved)
+}
+
+/// Keep the shared value. The conflict stays visible ("resolving") until the shared database accepts it.
+#[tauri::command]
+pub async fn conflict_accept_shared(state: State<'_, AppState>, conflict_id: String) -> AppResult<()> {
+    let a = actor(&state);
+    crate::sync_queue::accept_shared(&state.db.lock().unwrap(), &conflict_id, &a)?;
+    sync::nudge_shared(&state);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn diag_recent(state: State<'_, AppState>, min_severity: Option<String>, limit: Option<i64>) -> AppResult<Vec<crate::diag::DiagEvent>> {
+    Ok(crate::diag::recent(&state.db.lock().unwrap(), min_severity.as_deref().unwrap_or("info"), limit.unwrap_or(500))?)
 }
 
 #[tauri::command]

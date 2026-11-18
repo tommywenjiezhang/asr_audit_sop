@@ -7,8 +7,21 @@ const fx: Any = structuredClone(fixtures);
 const scenario = new URLSearchParams(location.search).get("scenario") ?? "";
 
 function detail(id: number): Any {
-  return fx.details[String(id)];
+  const d = fx.details[String(id)];
+  // fields added with the shared database (older fixtures do not have them)
+  d.notes ??= d.ticket.internal_notes ? [{ note_id: `n${id}`, author_name: "Sam Staff", body: d.ticket.internal_notes, created_at: d.ticket.updated_at, updated_at: d.ticket.updated_at, origin: "local", sync_state: "" }] : [];
+  d.ownership ??= []; d.completions ??= []; d.conflicts ??= []; d.pending_ops ??= [];
+  d.ticket.sync_state ??= "synced"; d.ticket.shared_version ??= 1; d.ticket.shared_state ??= "shared";
+  return d;
 }
+
+const demoShared = () => ({
+  mode: "shared", path: "\\\\fileserver\\Team\\asr_email_support.accdb", state: "connected", reachable: true, readable: true, writable: true,
+  database_id: "00000000-demo", database_name: "ASR Support Desk (demo)", environment: "test", schema_version: 1, compatibility: "ok", app_schema_version: 1,
+  bound_database_id: "00000000-demo", bound_database_name: "ASR Support Desk (demo)", driver: "Available64", last_success_at: "2026-11-17T15:02:00Z",
+  last_attempt_at: "2026-11-17T15:02:00Z", next_attempt_at: "2026-11-17T15:04:00Z", running: false, consecutive_failures: 0,
+  queue: { pending: 0, held: 0, conflicts: 0, rejected: 0, isolated: 0 },
+});
 
 function err(code: string, message: string): never {
   throw { code, message };
@@ -17,7 +30,7 @@ function err(code: string, message: string): never {
 function list(q: Any) {
   let rows: Any[] = fx.tickets.map((t: Any) => {
     const d = detail(t.id).ticket;
-    return { ...t, status: d.status, completed_at: d.completed_at, assignee_staff_id: d.assignee_staff_id, assignee_name: d.assignee_name, scope_state: d.scope_state, scope_reason: d.scope_reason };
+    return { ...t, status: d.status, completed_at: d.completed_at, assignee_staff_id: d.assignee_staff_id, assignee_name: d.assignee_name, scope_state: d.scope_state, scope_reason: d.scope_reason, sync_state: t.sync_state ?? "synced" };
   });
   if (q.view && q.view !== "all") rows = rows.filter((t) => t.scope_state === q.view);
   if (q.status === "open") rows = rows.filter((t) => t.status !== "Done");
@@ -129,6 +142,11 @@ export function handler(cmd: string, args: Any): unknown {
     case "assignment_retry": return { ticket_id: args.ticketId, display_id: "", result: "assigned", message: "Assigned.", failures: [], notify_state: "submitted" };
     case "ticket_start_work": { const d = detail(args.id); d.ticket.status = "In Progress"; return d.ticket; }
     case "overview_get": return { ...fx.overview, last_reconciled_at: "2026-11-17T15:02:00Z" };
+    case "shared_status": case "shared_test_connection": case "shared_sync_now": return demoShared();
+    case "shared_import_preview": return { local_only: 0, with_message_id: 0, without_message_id: 0, done: 0, open: 0, staff: fx.staff.length, already_shared: 0, held_ops: 0 };
+    case "notes_add": { const d = detail(args.ticketId); const n = { note_id: `n${Date.now()}`, author_name: "Sam Staff", body: args.body, created_at: new Date().toISOString(), updated_at: new Date().toISOString(), origin: "local", sync_state: "" }; d.notes.push(n); return n; }
+    case "conflicts_list": return [];
+    case "diag_recent": return [];
     case "plugin:event|listen": return 1;
     case "plugin:event|unlisten": return null;
     default:

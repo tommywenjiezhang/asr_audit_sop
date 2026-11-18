@@ -23,6 +23,9 @@ pub struct AppState {
     pub startup_ms: AtomicU64,
     /// Tickets with a Mark Done run in progress (blocks repeated clicks).
     pub completing: Mutex<std::collections::HashSet<i64>>,
+    /// Shared (Access) database synchronization: status, single-flight guard, wake signal.
+    pub shared: crate::shared_sync::SharedController,
+    pub app_version: String,
     _log_guard: Mutex<Option<tracing_appender::non_blocking::WorkerGuard>>,
 }
 
@@ -111,6 +114,17 @@ pub fn run() {
             let settings = Settings::load(&settings_path);
             let conn = db::open(&data_dir.join("support_desk.db")).map_err(|e| e.to_string())?;
             templates_store::seed_embedded(&conn).map_err(|e| e.to_string())?;
+            // core functions read the mode from SQLite (settings.json is the source)
+            crate::sync_queue::set_mode(&conn, &settings.shared_mode).map_err(|e| e.to_string())?;
+            let version = app.package_info().version.to_string();
+            crate::diag::record(&conn, crate::diag::Severity::Info, "startup", "APP_START",
+                &format!("ASR/Audit Support Desk {version} started; local schema v{}; shared mode {}", db::schema_version(&conn).unwrap_or(0), settings.shared_mode), "", "");
+            // pre-select "who am I" from the Windows account when nothing is chosen yet
+            if crate::staff::current_staff_id(&conn).ok().flatten().is_none() {
+                if let Ok(Some(id)) = crate::staff::match_windows_account(&conn, &crate::sync_queue::windows_account()) {
+                    let _ = crate::staff::set_current_staff_id(&conn, Some(id));
+                }
+            }
             let images_dir = data_dir.join("sop-images");
             if let Err(e) = materialize_images(&images_dir) {
                 tracing::warn!(error = %e, "could not write SOP images");
@@ -134,6 +148,8 @@ pub fn run() {
                 sync: sync::SyncController::default(),
                 startup_ms: AtomicU64::new(0),
                 completing: Mutex::new(Default::default()),
+                shared: Default::default(),
+                app_version: version,
                 _log_guard: Mutex::new(guard),
             });
             if let Err(e) = setup_tray(app) {
@@ -145,6 +161,7 @@ pub fn run() {
                 }
             }
             sync::spawn_scheduler(app.handle().clone());
+            sync::spawn_shared_scheduler(app.handle().clone());
             let ms = started.elapsed().as_millis() as u64;
             app.state::<AppState>().startup_ms.store(ms, std::sync::atomic::Ordering::Relaxed);
             tracing::info!(startup_ms = ms, "backend ready");
@@ -222,6 +239,22 @@ pub fn run() {
             commands::db_backup,
             commands::db_restore,
             commands::app_info,
+            commands::shared_status,
+            commands::shared_test_connection,
+            commands::shared_sync_now,
+            commands::shared_save_config,
+            commands::shared_release_held,
+            commands::shared_discard_held,
+            commands::shared_switch_database,
+            commands::shared_import_preview,
+            commands::shared_import_run,
+            commands::shared_create_database,
+            commands::notes_add,
+            commands::notes_edit,
+            commands::notes_delete,
+            commands::conflicts_list,
+            commands::conflict_accept_shared,
+            commands::diag_recent,
         ])
         .run(tauri::generate_context!())
         .expect("error while running ASR/Audit Support Desk");

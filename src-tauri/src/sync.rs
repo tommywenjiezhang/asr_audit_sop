@@ -45,6 +45,17 @@ pub async fn run_once(app: &AppHandle, trigger: &str) -> AppResult<SyncOutcome> 
     let _ = app.emit("sync-status", state.sync.snapshot());
     // the scan may have changed membership (verification) even without new emails
     let _ = app.emit("tickets-changed", ());
+    {
+        let conn = state.db.lock().unwrap();
+        match &result {
+            Ok(o) => crate::diag::record(&conn, crate::diag::Severity::Info, "outlook-scan", "SCAN_OK",
+                &format!("Outlook check ({trigger}): {} new email(s), {} new ticket(s), {} updated, {} warning(s)", o.report.new_messages, o.report.created_tickets, o.report.updated_tickets, o.warnings.len()),
+                &o.warnings.join(" | "), ""),
+            Err(e) => crate::diag::record(&conn, crate::diag::Severity::Error, "outlook-scan", e.code(), &format!("Outlook check ({trigger}) failed: {e}"), "", ""),
+        }
+    }
+    // new tickets/replies were queued for the shared database
+    nudge_shared(&state);
     result
 }
 
@@ -190,6 +201,130 @@ pub async fn reconcile(state: &AppState) -> AppResult<crate::scope::ReconcileRep
     }
     tracing::info!(applied = rep.applied, complete = rep.complete, in_scope = rep.in_scope, newly_out = rep.newly_out, current = rep.current, history = rep.history, unverified = rep.unverified, "scope reconciliation finished");
     Ok(rep)
+}
+
+// ------------------------------------------------------------------ shared database (background)
+
+/// Ask the shared-database scheduler to synchronize soon (debounced), e.g. after a local change.
+pub fn nudge_shared(state: &AppState) {
+    state.shared.wake.notify_one();
+}
+
+fn emit_shared(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    let _ = app.emit("shared-status", state.shared.snapshot());
+}
+
+/// Check the shared database and, when `do_sync`, push/pull. All network/driver work runs on a blocking
+/// thread with a time limit; the thread owns the single-flight guard so a hung call never overlaps.
+pub async fn shared_run(app: &AppHandle, trigger: &str, do_sync: bool) -> AppResult<crate::shared_sync::SharedStatus> {
+    use crate::shared_sync as shs;
+    use crate::sync_queue as q;
+    let state = app.state::<AppState>();
+    let s = state.settings.read().unwrap().clone();
+    let path = std::path::PathBuf::from(s.shared_db_path.trim());
+    let dev = q::device_info(&state.db.lock().unwrap(), &state.app_version)?;
+    if s.shared_mode == q::MODE_STANDALONE && trigger != "test" {
+        let st = shs::compose_status(&state.db.lock().unwrap(), &s.shared_mode, &s.shared_db_path, None, None);
+        *state.shared.status.lock().unwrap() = st.clone();
+        emit_shared(app);
+        return Ok(st);
+    }
+    {
+        let mut st = state.shared.status.lock().unwrap();
+        st.last_attempt_at = Some(now());
+    }
+    emit_shared(app);
+    let app2 = app.clone();
+    let mailbox = s.mailbox_name.clone();
+    let task = tauri::async_runtime::spawn_blocking(move || {
+        let st = app2.state::<AppState>();
+        let _g = st.shared.try_start()?;
+        Some(shs::connect_and_sync(&st.db, &path, &dev, &mailbox, do_sync))
+    });
+    let prev_state = state.shared.status.lock().unwrap().state.clone();
+    let result = tokio::time::timeout(Duration::from_secs(150), task).await;
+    let conn = state.db.lock().unwrap();
+    let (status, ok) = match result {
+        Err(_) => {
+            let mut st = shs::compose_status(&conn, &s.shared_mode, &s.shared_db_path, None, None);
+            st.state = "unavailable".into();
+            st.error_code = Some("DB_TIMEOUT".into());
+            st.error_message = Some("The shared database did not answer within 150 seconds (slow or unreachable network). Your changes are saved on this computer.".into());
+            (st, false)
+        }
+        Ok(Err(e)) => return Err(AppError::msg(format!("shared database check failed: {e}"))),
+        Ok(Ok(None)) => return Err(AppError::coded("BUSY", "A shared database check is already running.")),
+        Ok(Ok(Some((probe, cycle)))) => {
+            let st = shs::compose_status(&conn, &s.shared_mode, &s.shared_db_path, Some(&probe), cycle.as_ref());
+            let ok = st.state == "connected" && cycle.as_ref().map(|c| c.is_ok()).unwrap_or(do_sync == false);
+            (st, ok)
+        }
+    };
+    let failures = state.shared.record_outcome(ok || status.state == "standalone");
+    // Diagnostics: one event per check outcome change, every failure with its code (redacted)
+    if status.state != prev_state || !ok {
+        let sev = if ok { crate::diag::Severity::Info } else if status.state == "unavailable" || status.state == "locked" { crate::diag::Severity::Warning } else { crate::diag::Severity::Error };
+        let summary = match &status.error_message {
+            Some(m) => format!("Shared database {}: {m}", status.state.replace('_', " ")),
+            None => format!("Shared database {} ({trigger})", status.state.replace('_', " ")),
+        };
+        crate::diag::record(&conn, sev, "shared-db", status.error_code.as_deref().unwrap_or("DB_STATUS"), &summary,
+            &format!("{} driver={:?} reachable={:?} readable={:?} writable={:?} failures={failures}", status.provider_detail.clone().unwrap_or_default(), status.driver, status.reachable, status.readable, status.writable),
+            status.database_id.as_deref().unwrap_or(""));
+    }
+    if let Some(r) = &status.last_report {
+        if r.pushed > 0 || r.pulled > 0 {
+            crate::diag::record(&conn, crate::diag::Severity::Info, "sync", "SYNC_OK",
+                &format!("Synchronized: sent {} change(s) ({} accepted, {} conflict, {} rejected, {} replayed), received {} case(s)", r.pushed, r.accepted, r.conflicts, r.rejected, r.replayed, r.pulled),
+                &format!("elapsed {} ms, full reconcile {}", r.elapsed_ms, r.full_reconcile), "");
+        }
+    }
+    drop(conn);
+    let changed = status.last_report.as_ref().map(|r| r.pulled > 0 || r.accepted > 0 || r.conflicts > 0).unwrap_or(false);
+    *state.shared.status.lock().unwrap() = status;
+    emit_shared(app);
+    if changed {
+        let _ = app.emit("tickets-changed", ());
+    }
+    Ok(state.shared.snapshot())
+}
+
+/// Background synchronization with the shared database: on startup, every `shared_sync_minutes`, a few
+/// seconds after a local change (`nudge_shared`), with bounded backoff while it is unreachable.
+pub fn spawn_shared_scheduler(app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        let state = app.state::<AppState>();
+        tokio::time::sleep(Duration::from_secs(4)).await;
+        if let Err(e) = shared_run(&app, "startup", true).await {
+            tracing::warn!(error = %e, "startup shared sync failed");
+        }
+        loop {
+            let (minutes, mode) = {
+                let s = state.settings.read().unwrap();
+                (s.shared_sync_minutes, s.shared_mode.clone())
+            };
+            let delay = state.shared.delay_secs(minutes);
+            {
+                let mut st = state.shared.status.lock().unwrap();
+                st.next_attempt_at = if mode == "shared" { Some((Utc::now() + ChronoDuration::seconds(delay as i64)).to_rfc3339_opts(chrono::SecondsFormat::Secs, true)) } else { None };
+            }
+            emit_shared(&app);
+            tokio::select! {
+                _ = tokio::time::sleep(Duration::from_secs(delay)) => {}
+                _ = state.shared.wake.notified() => {
+                    // debounce bursts of local changes
+                    tokio::time::sleep(Duration::from_secs(3)).await;
+                }
+            }
+            let mode = state.settings.read().unwrap().shared_mode.clone();
+            if mode == "shared" {
+                if let Err(e) = shared_run(&app, "schedule", true).await {
+                    tracing::debug!(error = %e, "shared sync skipped");
+                }
+            }
+        }
+    });
 }
 
 /// Background scheduler: sleeps until the next due time; `wake` re-reads settings.

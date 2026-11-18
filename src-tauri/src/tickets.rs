@@ -59,6 +59,9 @@ pub struct TicketSummary {
     pub ticket_ref: Option<String>,
     /// incoming emails of this ticket currently confirmed in the selected scope
     pub in_scope_count: i64,
+    /// shared-database state: "local" | "pending" | "synced" | "conflict" | "failed"
+    pub sync_state: String,
+    pub review_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -103,6 +106,12 @@ pub struct Ticket {
     pub scope_reason: Option<String>,
     pub scope_changed_at: Option<String>,
     pub assignee_name: Option<String>,
+    pub review_reason: Option<String>,
+    pub shared_version: i64,
+    /// "local_only" | "queued" | "shared"
+    pub shared_state: String,
+    pub shared_refreshed_at: Option<String>,
+    pub sync_state: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -182,9 +191,35 @@ pub struct TicketDetail {
     pub schools: Vec<i64>,
     pub completion: Vec<CompletionRow>,
     pub assignments: Vec<crate::assignment::AssignmentOp>,
+    pub notes: Vec<crate::notes::Note>,
+    pub ownership: Vec<OwnershipRow>,
+    pub completions: Vec<CompletionDecision>,
+    pub conflicts: Vec<crate::sync_queue::LocalConflict>,
+    pub pending_ops: Vec<crate::sync_queue::OpRow>,
 }
 
-const TICKET_COLS: &str = "id,status,priority,issue_type,issue_type_source,classification_confidence,school_njiis_id,school_name,school_verification,sender_name,sender_email,original_subject,assigned_staff,conversation_id,possible_duplicate_of,internal_notes,resolution_notes,next_followup_date,source,created_at,updated_at,last_email_received_at,last_response_at,needs_review,completed_at,first_received_at,staff_actions,last_prompt_at,assignee_staff_id,assigned_at,ownership_conflict,ticket_ref,scope_state,scope_reason,scope_changed_at,(SELECT display_name FROM staff s WHERE s.id=tickets.assignee_staff_id)";
+#[derive(Debug, Clone, Serialize)]
+pub struct OwnershipRow {
+    pub staff_name: Option<String>,
+    pub started_at: String,
+    pub ended_at: Option<String>,
+    pub started_by: Option<String>,
+    pub start_reason: Option<String>,
+    pub end_reason: Option<String>,
+    pub origin: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CompletionDecision {
+    pub completion_id: String,
+    pub actor_name: Option<String>,
+    pub decided_at: String,
+    pub covered: i64,
+    pub state: String,
+    pub state_reason: Option<String>,
+}
+
+const TICKET_COLS: &str = "id,status,priority,issue_type,issue_type_source,classification_confidence,school_njiis_id,school_name,school_verification,sender_name,sender_email,original_subject,assigned_staff,conversation_id,possible_duplicate_of,internal_notes,resolution_notes,next_followup_date,source,created_at,updated_at,last_email_received_at,last_response_at,needs_review,completed_at,first_received_at,staff_actions,last_prompt_at,assignee_staff_id,assigned_at,ownership_conflict,ticket_ref,scope_state,scope_reason,scope_changed_at,(SELECT display_name FROM staff s WHERE s.id=tickets.assignee_staff_id),review_reason,shared_version,shared_state,shared_refreshed_at";
 
 fn map_ticket(r: &rusqlite::Row) -> rusqlite::Result<Ticket> {
     let id: i64 = r.get(0)?;
@@ -206,6 +241,11 @@ fn map_ticket(r: &rusqlite::Row) -> rusqlite::Result<Ticket> {
         scope_reason: r.get(33)?,
         scope_changed_at: r.get(34)?,
         assignee_name: r.get(35)?,
+        review_reason: r.get(36)?,
+        shared_version: r.get(37)?,
+        shared_state: r.get(38)?,
+        shared_refreshed_at: r.get(39)?,
+        sync_state: String::new(),
         id,
         display_id: display_id(id),
         status: r.get(1)?,
@@ -234,9 +274,12 @@ fn map_ticket(r: &rusqlite::Row) -> rusqlite::Result<Ticket> {
 }
 
 pub fn get(conn: &Connection, id: i64) -> AppResult<Ticket> {
-    conn.query_row(&format!("SELECT {TICKET_COLS} FROM tickets WHERE id=?1"), [id], map_ticket)
+    let mut t = conn
+        .query_row(&format!("SELECT {TICKET_COLS} FROM tickets WHERE id=?1"), [id], map_ticket)
         .optional()?
-        .ok_or_else(|| AppError::coded("NOT_FOUND", format!("Ticket {} not found", display_id(id))))
+        .ok_or_else(|| AppError::coded("NOT_FOUND", format!("Ticket {} not found", display_id(id))))?;
+    t.sync_state = crate::sync_queue::ticket_sync_state(conn, id)?;
+    Ok(t)
 }
 
 pub fn history(conn: &Connection, ticket_id: i64, actor: &str, action: &str, field: Option<&str>, old: Option<&str>, new: Option<&str>) -> AppResult<()> {
@@ -257,8 +300,11 @@ fn touch(conn: &Connection, id: i64) -> AppResult<()> {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct ListQuery {
-    /// "current" (Current Tickets) | "history" (Ticket History) | "unverified" (Awaiting Verification) | "" (all)
+    /// "current" (Current Tickets) | "history" (Ticket History) | "unverified" (Awaiting location check) |
+    /// "team" / "" (all cases, any folder)
     pub view: String,
+    /// "" | "pending" | "conflict" | "failed" | "attention" (pending, conflict or failed)
+    pub sync: String,
     /// "" (all) | "Unassigned" | "Assigned" | "In Progress" | "Done" | "open" (anything but Done)
     pub status: String,
     /// "" (anyone) | "none" (no assignee) | staff id
@@ -305,14 +351,15 @@ fn parse_ticket_id(s: &str) -> Option<i64> {
 }
 
 pub fn list(conn: &Connection, q: &ListQuery) -> AppResult<ListResult> {
-    let mut where_: Vec<String> = vec!["1=1".into()];
+    // duplicates combined into another local ticket stay stored but are never listed
+    let mut where_: Vec<String> = vec!["t.merged_into IS NULL".into()];
     let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
     let arg = |v: String, args: &mut Vec<Box<dyn rusqlite::ToSql>>| {
         args.push(Box::new(v));
         format!("?{}", args.len())
     };
     match q.view.as_str() {
-        "" | "all" => {}
+        "" | "all" | "team" => {}
         v @ ("current" | "history" | "unverified") => where_.push(format!("t.scope_state = '{v}'")),
         _ => return Err(AppError::coded("INVALID", "Unknown view")),
     }
@@ -332,6 +379,12 @@ pub fn list(conn: &Connection, q: &ListQuery) -> AppResult<ListResult> {
             let id: i64 = id.parse().map_err(|_| AppError::coded("INVALID", "Unknown assignee filter"))?;
             where_.push(format!("t.assignee_staff_id = {id}"));
         }
+    }
+    match q.sync.as_str() {
+        "" => {}
+        v @ ("pending" | "conflict" | "failed") => where_.push(format!("({}) = '{v}'", crate::sync_queue::TICKET_SYNC_SQL)),
+        "attention" => where_.push(format!("({}) IN ('pending','conflict','failed')", crate::sync_queue::TICKET_SYNC_SQL)),
+        _ => return Err(AppError::coded("INVALID", "Unknown sync filter")),
     }
     if !q.reason.is_empty() {
         let p = arg(q.reason.clone(), &mut args);
@@ -408,9 +461,11 @@ pub fn list(conn: &Connection, q: &ListQuery) -> AppResult<ListResult> {
                 t.assignee_staff_id, (SELECT display_name FROM staff s WHERE s.id=t.assignee_staff_id), t.assigned_at, t.ownership_conflict,
                 t.scope_state, t.scope_reason, t.ticket_ref,
                 (SELECT COUNT(*) FROM ticket_email_links l JOIN email_messages m ON m.id=l.message_id
-                  WHERE l.ticket_id=t.id AND l.link_type IN ('original','reply') AND m.is_internal=0 AND m.scope_state='in')
+                  WHERE l.ticket_id=t.id AND l.link_type IN ('original','reply') AND m.is_internal=0 AND m.scope_state='in'),
+                ({sync}), t.review_reason
          FROM tickets t WHERE {w} ORDER BY {order} LIMIT {limit} OFFSET {}",
-        q.offset.max(0)
+        q.offset.max(0),
+        sync = crate::sync_queue::TICKET_SYNC_SQL
     );
     let mut st = conn.prepare(&sql)?;
     let rows = st
@@ -446,10 +501,12 @@ pub fn list(conn: &Connection, q: &ListQuery) -> AppResult<ListResult> {
                 scope_reason: r.get(25)?,
                 ticket_ref: r.get(26)?,
                 in_scope_count: r.get(27)?,
+                sync_state: r.get(28)?,
+                review_reason: r.get(29)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
-    let mut st = conn.prepare("SELECT scope_state, COUNT(*) FROM tickets GROUP BY scope_state")?;
+    let mut st = conn.prepare("SELECT scope_state, COUNT(*) FROM tickets WHERE merged_into IS NULL GROUP BY scope_state")?;
     let counts = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<Result<Vec<_>, _>>()?;
     Ok(ListResult { rows, total, counts })
 }
@@ -523,6 +580,10 @@ fn effective_field(conn: &Connection, ticket_id: i64, key: &str) -> AppResult<(S
     })
 }
 
+pub fn refresh_school_columns_pub(conn: &Connection, ticket_id: i64) -> AppResult<()> {
+    refresh_school_columns(conn, ticket_id)
+}
+
 /// Keep the denormalized school columns on `tickets` in sync with the field values.
 fn refresh_school_columns(conn: &Connection, ticket_id: i64) -> AppResult<()> {
     let (id, id_trusted) = effective_field(conn, ticket_id, "school_njiis_id")?;
@@ -583,6 +644,10 @@ pub fn set_field(conn: &Connection, ticket_id: i64, key: &str, value: Option<Str
     let tx = conn.unchecked_transaction()?;
     get(&tx, ticket_id)?;
     let (old, _) = effective_field(&tx, ticket_id, key)?;
+    let before: Option<(Option<String>, i64)> = tx
+        .query_row("SELECT manual_value, verified FROM ticket_fields WHERE ticket_id=?1 AND field_key=?2", params![ticket_id, key], |r| Ok((r.get(0)?, r.get(1)?)))
+        .optional()?;
+    let mark = crate::sync_queue::last_history_row(&tx)?;
     let value = value.map(|v| v.trim().to_string());
     tx.execute(
         "INSERT INTO ticket_fields(ticket_id,field_key,manual_value,verified,updated_at) VALUES(?1,?2,?3,?4,?5)
@@ -596,6 +661,19 @@ pub fn set_field(conn: &Connection, ticket_id: i64, key: &str, value: Option<Str
     }
     if key == "school_njiis_id" || key == "school_name" {
         refresh_school_columns(&tx, ticket_id)?;
+    }
+    let (b_manual, b_ver) = before.map(|(m, v)| (m, v != 0)).unwrap_or((None, false));
+    if b_manual != value || b_ver != verified {
+        let extracted: Option<String> = tx.query_row("SELECT extracted_value FROM ticket_fields WHERE ticket_id=?1 AND field_key=?2", params![ticket_id, key], |r| r.get(0))?;
+        let op = crate::sync_queue::enqueue(&tx, actor, crate::sync_queue::NewOp {
+            ticket_id: Some(ticket_id),
+            entity_type: "field",
+            entity_id: Some(key.to_string()),
+            op_type: "field.set",
+            original: serde_json::json!({"manual": b_manual, "has_manual": b_manual.is_some(), "verified": b_ver}),
+            proposed: serde_json::json!({"manual": value, "has_manual": value.is_some(), "verified": verified, "extracted": extracted}),
+        })?;
+        crate::sync_queue::tag_history(&tx, ticket_id, &op, mark)?;
     }
     touch(&tx, ticket_id)?;
     crate::search::reindex(&tx, ticket_id)?;
@@ -625,8 +703,19 @@ pub struct TicketPatch {
 }
 
 pub fn update(conn: &Connection, id: i64, p: &TicketPatch, actor: &str) -> AppResult<Ticket> {
+    // the old single notes box: a changed text becomes a new note (notes are separate records now)
+    if let Some(n) = p.internal_notes.as_deref().map(str::trim).filter(|n| !n.is_empty() && n.len() <= 50_000) {
+        let last: Option<String> = conn.query_row("SELECT body FROM ticket_notes WHERE ticket_id=?1 AND deleted=0 ORDER BY id DESC LIMIT 1", [id], |r| r.get(0)).optional()?;
+        if last.as_deref() != Some(n) {
+            crate::notes::add(conn, id, n, actor)?;
+        }
+    }
     let tx = conn.unchecked_transaction()?;
     let cur = get(&tx, id)?;
+    let mark = crate::sync_queue::last_history_row(&tx)?;
+    let issues_before: Vec<String> = issues(&tx, id)?.into_iter().map(|i| i.issue_type).collect();
+    let mut shared_orig = serde_json::Map::new();
+    let mut shared_prop = serde_json::Map::new();
     let mut changed = false;
     macro_rules! upd {
         ($field:ident, $col:literal, $validate:expr) => {
@@ -640,6 +729,10 @@ pub fn update(conn: &Connection, id: i64, p: &TicketPatch, actor: &str) -> AppRe
                 if old.as_deref().unwrap_or("") != v {
                     tx.execute(&format!("UPDATE tickets SET {}=NULLIF(?2,'') WHERE id=?1", $col), params![id, v])?;
                     history(&tx, id, actor, "Ticket updated", Some($col), old.as_deref(), Some(&v))?;
+                    if ["sender_name", "sender_email", "staff_actions"].contains(&$col) {
+                        shared_orig.insert($col.into(), serde_json::json!(old));
+                        shared_prop.insert($col.into(), serde_json::json!(if v.is_empty() { None } else { Some(v.clone()) }));
+                    }
                     changed = true;
                 }
             }
@@ -673,6 +766,8 @@ pub fn update(conn: &Connection, id: i64, p: &TicketPatch, actor: &str) -> AppRe
         if *s != cur.priority {
             tx.execute("UPDATE tickets SET priority=?2 WHERE id=?1", params![id, s])?;
             history(&tx, id, actor, "Priority changed", Some("priority"), Some(&cur.priority), Some(s))?;
+            shared_orig.insert("priority".into(), serde_json::json!(cur.priority));
+            shared_prop.insert("priority".into(), serde_json::json!(s));
             changed = true;
         }
     }
@@ -692,7 +787,6 @@ pub fn update(conn: &Connection, id: i64, p: &TicketPatch, actor: &str) -> AppRe
         }
     }
     upd!(assigned_staff, "assigned_staff", |v: &str| v.len() <= 200);
-    upd!(internal_notes, "internal_notes", |v: &str| v.len() <= 50_000);
     upd!(resolution_notes, "resolution_notes", |v: &str| v.len() <= 50_000);
     upd!(next_followup_date, "next_followup_date", |v: &str| v.is_empty() || chrono::NaiveDate::parse_from_str(v, "%Y-%m-%d").is_ok());
     upd!(sender_name, "sender_name", |v: &str| v.len() <= 300);
@@ -707,6 +801,20 @@ pub fn update(conn: &Connection, id: i64, p: &TicketPatch, actor: &str) -> AppRe
         tx.execute("UPDATE tickets SET needs_review=0 WHERE id=?1", [id])?;
         history(&tx, id, actor, "Review flag cleared", None, None, None)?;
         changed = true;
+    }
+    if !shared_prop.is_empty() {
+        let op = crate::sync_queue::enqueue(&tx, actor, crate::sync_queue::NewOp {
+            ticket_id: Some(id), entity_type: "ticket", entity_id: None, op_type: "ticket.update",
+            original: serde_json::Value::Object(shared_orig), proposed: serde_json::Value::Object(shared_prop),
+        })?;
+        crate::sync_queue::tag_history(&tx, id, &op, mark)?;
+    }
+    let issues_after: Vec<String> = issues(&tx, id)?.into_iter().map(|i| i.issue_type).collect();
+    if issues_after != issues_before {
+        crate::sync_queue::enqueue(&tx, actor, crate::sync_queue::NewOp {
+            ticket_id: Some(id), entity_type: "ticket", entity_id: None, op_type: "issues.set",
+            original: serde_json::json!({"list": issues_before}), proposed: serde_json::json!({"list": issues_after}),
+        })?;
     }
     if changed {
         touch(&tx, id)?;
@@ -805,7 +913,13 @@ pub fn set_issues(conn: &Connection, ticket_id: i64, list: &[String], actor: &st
     }
     tx.execute("UPDATE tickets SET issue_type=?2, issue_type_source='manual' WHERE id=?1", params![ticket_id, clean[0]])?;
     if before != clean {
+        let mark = crate::sync_queue::last_history_row(&tx)?;
         history(&tx, ticket_id, actor, "Issue types set", Some("issue_type"), Some(&before.join(", ")), Some(&clean.join(", ")))?;
+        let op = crate::sync_queue::enqueue(&tx, actor, crate::sync_queue::NewOp {
+            ticket_id: Some(ticket_id), entity_type: "ticket", entity_id: None, op_type: "issues.set",
+            original: serde_json::json!({"list": before}), proposed: serde_json::json!({"list": clean}),
+        })?;
+        crate::sync_queue::tag_history(&tx, ticket_id, &op, mark)?;
     }
     touch(&tx, ticket_id)?;
     crate::search::reindex(&tx, ticket_id)?;
@@ -831,10 +945,17 @@ pub fn add_school(conn: &Connection, ticket_id: i64, actor: &str) -> AppResult<i
     get(conn, ticket_id)?;
     let next: i64 = conn.query_row("SELECT COALESCE(MAX(slot),0)+1 FROM ticket_schools WHERE ticket_id=?1", [ticket_id], |r| r.get(0))?;
     let next = next.max(2);
-    ensure_school_slot(conn, ticket_id, 1, SYSTEM)?;
-    ensure_school_slot(conn, ticket_id, next, actor)?;
-    history(conn, ticket_id, actor, "School added", None, None, Some(&format!("School {next}")))?;
-    touch(conn, ticket_id)?;
+    let tx = conn.unchecked_transaction()?;
+    ensure_school_slot(&tx, ticket_id, 1, SYSTEM)?;
+    ensure_school_slot(&tx, ticket_id, next, actor)?;
+    let mark = crate::sync_queue::last_history_row(&tx)?;
+    history(&tx, ticket_id, actor, "School added", None, None, Some(&format!("School {next}")))?;
+    let op = crate::sync_queue::enqueue(&tx, actor, crate::sync_queue::NewOp {
+        ticket_id: Some(ticket_id), entity_type: "school", entity_id: Some(next.to_string()), op_type: "school.add", original: serde_json::json!({}), proposed: serde_json::json!({}),
+    })?;
+    crate::sync_queue::tag_history(&tx, ticket_id, &op, mark)?;
+    touch(&tx, ticket_id)?;
+    tx.commit()?;
     Ok(next)
 }
 
@@ -843,10 +964,17 @@ pub fn remove_school(conn: &Connection, ticket_id: i64, slot: i64, actor: &str) 
     if slot <= 1 {
         return Err(AppError::coded("INVALID", "The first school group cannot be removed; clear its fields instead."));
     }
-    conn.execute("UPDATE ticket_schools SET removed=1 WHERE ticket_id=?1 AND slot=?2", params![ticket_id, slot])?;
-    history(conn, ticket_id, actor, "School removed", None, Some(&format!("School {slot}")), None)?;
-    touch(conn, ticket_id)?;
-    crate::search::reindex(conn, ticket_id)?;
+    let tx = conn.unchecked_transaction()?;
+    tx.execute("UPDATE ticket_schools SET removed=1 WHERE ticket_id=?1 AND slot=?2", params![ticket_id, slot])?;
+    let mark = crate::sync_queue::last_history_row(&tx)?;
+    history(&tx, ticket_id, actor, "School removed", None, Some(&format!("School {slot}")), None)?;
+    let op = crate::sync_queue::enqueue(&tx, actor, crate::sync_queue::NewOp {
+        ticket_id: Some(ticket_id), entity_type: "school", entity_id: Some(slot.to_string()), op_type: "school.remove", original: serde_json::json!({}), proposed: serde_json::json!({}),
+    })?;
+    crate::sync_queue::tag_history(&tx, ticket_id, &op, mark)?;
+    touch(&tx, ticket_id)?;
+    crate::search::reindex(&tx, ticket_id)?;
+    tx.commit()?;
     Ok(())
 }
 
@@ -940,6 +1068,10 @@ pub fn create_manual(conn: &Connection, n: &NewTicket, settings: &Settings, acto
     }
     refresh_school_columns(conn, id)?;
     crate::search::reindex(conn, id)?;
+    // queued for the shared database with everything entered above (one snapshot)
+    let tx = conn.unchecked_transaction()?;
+    crate::sync_queue::on_ticket_created(&tx, id, actor, "manual")?;
+    tx.commit()?;
     Ok(id)
 }
 
@@ -996,7 +1128,31 @@ pub fn detail(conn: &Connection, id: i64) -> AppResult<TicketDetail> {
         schools: school_slots(conn, id)?,
         completion: completion_rows(conn, id)?,
         assignments: crate::assignment::ops(conn, id)?,
+        notes: crate::notes::list(conn, id)?,
+        ownership: ownership_rows(conn, id)?,
+        completions: completion_decisions(conn, id)?,
+        conflicts: crate::sync_queue::conflicts(conn, Some(id), false)?,
+        pending_ops: crate::sync_queue::ticket_ops(conn, id)?,
     })
+}
+
+pub fn ownership_rows(conn: &Connection, id: i64) -> AppResult<Vec<OwnershipRow>> {
+    let mut st = conn.prepare(
+        "SELECT COALESCE(staff_name, (SELECT display_name FROM staff s WHERE s.id=o.staff_id)), started_at, ended_at, started_by, start_reason, end_reason, origin
+         FROM ownership_history o WHERE ticket_id=?1 ORDER BY started_at, id",
+    )?;
+    let v = st
+        .query_map([id], |r| Ok(OwnershipRow { staff_name: r.get(0)?, started_at: r.get(1)?, ended_at: r.get(2)?, started_by: r.get(3)?, start_reason: r.get(4)?, end_reason: r.get(5)?, origin: r.get(6)? }))?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(v)
+}
+
+pub fn completion_decisions(conn: &Connection, id: i64) -> AppResult<Vec<CompletionDecision>> {
+    let mut st = conn.prepare("SELECT completion_id, actor_name, decided_at, json_array_length(covered_json), state, state_reason FROM completion_history WHERE ticket_id=?1 ORDER BY decided_at DESC, id DESC")?;
+    let v = st
+        .query_map([id], |r| Ok(CompletionDecision { completion_id: r.get(0)?, actor_name: r.get(1)?, decided_at: r.get(2)?, covered: r.get(3)?, state: r.get(4)?, state_reason: r.get(5)? }))?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(v)
 }
 
 /// Placeholder context for a ticket.
@@ -1068,10 +1224,12 @@ fn scanned_location(m: &IncomingMessage, scope: &crate::scope::ScopeCfg, staff: 
 
 fn find_message(conn: &Connection, m: &IncomingMessage) -> AppResult<Option<(i64, Option<String>, Option<String>)>> {
     if !m.internet_message_id.is_empty() {
+        // Outlook reports "<id>"; copies received from the shared database may be stored in either form
+        let bare = crate::shared_apply::normalize_message_id(&m.internet_message_id);
         if let Some(r) = conn
             .query_row(
-                "SELECT id, entry_id, folder_path FROM email_messages WHERE internet_message_id=?1",
-                [&m.internet_message_id],
+                "SELECT id, entry_id, folder_path FROM email_messages WHERE internet_message_id IN (?1, ?2, ?3) ORDER BY id LIMIT 1",
+                params![m.internet_message_id, bare, format!("<{bare}>")],
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
             .optional()?
@@ -1163,6 +1321,7 @@ pub fn ingest(conn: &Connection, msgs: &[IncomingMessage], settings: &Settings) 
             if let Some((tid, _)) = existing {
                 tx.execute("INSERT OR IGNORE INTO ticket_email_links(ticket_id,message_id,link_type,linked_at) VALUES(?1,?2,'internal',?3)", params![tid, mid, now()])?;
                 history(&tx, tid, SYSTEM, "Staff email linked", None, None, Some(&m.subject))?;
+                crate::sync_queue::on_email_linked(&tx, tid, mid, "internal", SYSTEM)?;
                 crate::search::reindex(&tx, tid)?;
             }
             rep.skipped_internal += 1;
@@ -1178,6 +1337,7 @@ pub fn ingest(conn: &Connection, msgs: &[IncomingMessage], settings: &Settings) 
                 params![tid, m.received_at, now()],
             )?;
             history(&tx, tid, SYSTEM, "New email in conversation", None, None, Some(&m.subject))?;
+            crate::sync_queue::on_email_linked(&tx, tid, mid, "reply", SYSTEM)?;
             // only fill values that were never extracted; staff-entered values are untouched
             for e in &analysis.fields {
                 if e.key != "issue_description" {
@@ -1257,6 +1417,7 @@ pub fn ingest(conn: &Connection, msgs: &[IncomingMessage], settings: &Settings) 
         }
         crate::search::reindex(&tx, tid)?;
         ensure_ticket_ref(&tx, tid)?;
+        crate::sync_queue::on_ticket_created(&tx, tid, SYSTEM, "outlook")?;
         rep.created_tickets += 1;
     }
     // placement (current/history) and owner inferred from staff folders - never a notification

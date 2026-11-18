@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { api, condMatches, copyText, errMsg, fmtDate, reasonLabel, statusText, type AssignmentOp, type FieldDef, type TicketDetail } from "../lib/api";
+  import { api, condMatches, copyText, errMsg, fmtDate, reasonLabel, statusText, SYNC_LABEL, type AssignmentOp, type FieldDef, type LocalConflict, type TicketDetail } from "../lib/api";
   import { app, issueName, toast } from "../lib/stores.svelte";
   import FieldInput from "./FieldInput.svelte";
 
@@ -120,9 +120,37 @@
     try { await track(api.removeSchool(id, slot)); await load(); } catch (e) { toast(errMsg(e), "error"); }
   }
 
-  let notes = $state("");
   let actions = $state("");
-  $effect(() => { notes = d?.ticket.internal_notes ?? ""; actions = d?.ticket.staff_actions ?? ""; });
+  $effect(() => { actions = d?.ticket.staff_actions ?? ""; });
+
+  // ---------------------------------------------------------------- notes (one record per note; shared)
+  let newNote = $state("");
+  let editNote = $state<{ id: string; body: string } | null>(null);
+  async function addNote() {
+    if (!newNote.trim()) return;
+    try { await track(api.notesAdd(id, newNote)); newNote = ""; await load(); onchanged(); } catch (e) { toast(errMsg(e), "error"); }
+  }
+  async function saveNoteEdit() {
+    if (!editNote) return;
+    try { await track(api.notesEdit(editNote.id, editNote.body)); editNote = null; await load(); } catch (e) { toast(errMsg(e), "error"); }
+  }
+  async function deleteNote(noteId: string) {
+    if (!confirm("Delete this note? It stays in the case history as deleted.")) return;
+    try { await track(api.notesDelete(noteId)); await load(); } catch (e) { toast(errMsg(e), "error"); }
+  }
+
+  // ---------------------------------------------------------------- shared-database conflicts
+  function conflictLabel(c: LocalConflict): string {
+    const f = c.field_name ?? "";
+    if (f.startsWith("field:")) return `Field “${f.slice(6)}”`;
+    if (f.startsWith("note:")) return "Note";
+    if (f === "staff_actions") return "Staff actions already taken";
+    if (f === "issues") return "Issue types";
+    return f || c.conflict_type;
+  }
+  async function acceptShared(c: LocalConflict) {
+    try { await api.conflictAcceptShared(c.conflict_id); await load(); onchanged(); toast("Kept the shared value. The conflict closes when the shared database confirms.", "ok"); } catch (e) { toast(errMsg(e), "error"); }
+  }
 
   // ---------------------------------------------------------------- actions
 
@@ -282,6 +310,8 @@
         {#if t.low_confidence}<span class="badge warn" title="The issue type was guessed with low confidence - please check it">Check issue type</span>{/if}
         {#if t.possible_duplicate_of}<span class="badge warn">Possible duplicate of T-{String(t.possible_duplicate_of).padStart(6, "0")}</span>{/if}
         {#if t.needs_review}<span class="badge warn">Needs review</span>{/if}
+        {#if t.sync_state !== "synced"}<span class="badge {t.sync_state === 'conflict' || t.sync_state === 'failed' ? 'err' : 'grey'}" title={t.shared_refreshed_at ? `Shared copy refreshed ${fmtDate(t.shared_refreshed_at)}` : ""}>{SYNC_LABEL[t.sync_state]}</span>{/if}
+        {#if t.ticket_ref}<span class="small muted" title="Stable reference, the same on every computer">{t.ticket_ref}</span>{/if}
         <span class="grow"></span>
         <span class="small muted">Received {fmtDate(t.first_received_at ?? t.created_at) || "—"}{#if t.completed_at}&nbsp;· Completed {fmtDate(t.completed_at)}{/if}</span>
       </div>
@@ -317,6 +347,31 @@
       {#if !isDone}<div class="small muted">Copying the prompt or opening a reply never marks the ticket Done. Mark Done flags this ticket's incoming email(s) complete and moves them to the completion folder.</div>{/if}
       {#if isDone}<div class="small muted">To assign a Done ticket, Reopen it first.</div>{/if}
     </div>
+
+    {#if d.conflicts.length}
+      <div class="panel pad conflicts">
+        <h3>Conflict — review required</h3>
+        <div class="small muted">Someone changed the same thing in the shared database before your change arrived. Your local change was NOT applied there; the shared value is shown in this case. Nothing was lost: both values are kept here until you decide.</div>
+        <table class="grid small" style="margin-top:6px">
+          <thead><tr><th>What</th><th>You saw</th><th>Your change</th><th>Shared value now</th><th></th></tr></thead>
+          <tbody>
+            {#each d.conflicts as c (c.conflict_id)}
+              <tr>
+                <td>{conflictLabel(c)}<div class="muted">{c.reason}</div></td>
+                <td class="pre">{c.original_value ?? "—"}</td>
+                <td class="pre"><b>{c.proposed_value ?? "—"}</b></td>
+                <td class="pre">{c.shared_value ?? "—"}</td>
+                <td style="white-space:nowrap">
+                  {#if c.status === "resolving"}<span class="badge grey">waiting for shared confirmation</span>
+                  {:else}<button class="small" onclick={() => acceptShared(c)}>Keep shared value</button>{/if}
+                </td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+        <div class="small muted">To keep your value instead, enter it again above — it is checked against the latest shared value.</div>
+      </div>
+    {/if}
 
     {#if d.assignments.length}
       <div class="panel pad">
@@ -425,8 +480,24 @@
       <h3>Staff</h3>
       <div class="field"><div class="lbl">Staff actions already taken</div>
         <div><textarea rows="3" bind:value={actions} placeholder="e.g. Reset the account on 11/17. Only actions recorded here are described as completed in the reply." onblur={() => actions !== (t.staff_actions ?? "") && patch({ staff_actions: actions })}></textarea></div></div>
-      <div class="field"><div class="lbl">Staff notes</div>
-        <div><textarea rows="3" bind:value={notes} onblur={() => notes !== (t.internal_notes ?? "") && patch({ internal_notes: notes })}></textarea></div></div>
+      <div class="field"><div class="lbl">Notes</div>
+        <div class="stack">
+          {#each d.notes as n (n.note_id)}
+            <div class="note">
+              <div class="row small"><b>{n.author_name}</b><span class="muted">{fmtDate(n.created_at)}{n.updated_at !== n.created_at ? ` · edited ${fmtDate(n.updated_at)}` : ""}</span>
+                {#if n.sync_state === "pending"}<span class="badge grey">pending sync</span>{:else if n.sync_state === "conflict"}<span class="badge err">conflict</span>{/if}
+                <span class="grow"></span>
+                <button class="link small" onclick={() => (editNote = { id: n.note_id, body: n.body })}>Edit</button>
+                <button class="link small" onclick={() => deleteNote(n.note_id)}>Delete</button></div>
+              {#if editNote?.id === n.note_id}
+                <textarea rows="3" bind:value={editNote.body}></textarea>
+                <div class="row"><span class="grow"></span><button class="small" onclick={() => (editNote = null)}>Cancel</button><button class="small primary" onclick={saveNoteEdit}>Save note</button></div>
+              {:else}<div class="pre small">{n.body}</div>{/if}
+            </div>
+          {:else}<div class="small muted">No notes yet.</div>{/each}
+          <textarea rows="2" bind:value={newNote} placeholder="Add a note for the team (each note keeps its author; notes from different people never overwrite each other)"></textarea>
+          <div class="row"><span class="grow"></span><button class="small" disabled={!newNote.trim()} onclick={addNote}>Add note</button></div>
+        </div></div>
       {#if t.resolution_notes}
         <div class="field"><div class="lbl">Earlier resolution notes</div><div class="small pre">{t.resolution_notes}</div></div>
       {/if}
@@ -521,6 +592,8 @@
   .school:first-of-type { border-top: none; }
   details { margin-top: 8px; }
   .pre { white-space: pre-wrap; }
+  .note { border-left: 3px solid #c9d1db; padding: 2px 8px; }
+  .conflicts { border: 1px solid var(--err); }
   .prompt { white-space: pre-wrap; word-break: break-word; font-family: Consolas, monospace; font-size: 12px; background: #f8fafc; border: 1px solid var(--border); border-radius: 6px; padding: 8px; max-height: 420px; overflow: auto; margin: 0; user-select: text; }
   .msg { border-top: 1px solid var(--border); padding: 6px 0; }
   .msghead { display: flex; gap: 8px; align-items: center; width: 100%; border: none; background: none; padding: 0; height: 26px; text-align: left; }

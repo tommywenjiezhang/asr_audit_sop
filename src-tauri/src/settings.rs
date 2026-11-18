@@ -51,6 +51,13 @@ pub struct Settings {
     /// Outlook account (SMTP address) used to send assignment notifications; blank = Outlook's default
     /// account. Must be an account the current user may send from (no shared-mailbox Send As is assumed).
     pub notify_account: String,
+    /// "shared" (save locally, synchronize with the shared Access database when reachable) |
+    /// "standalone" (everything stays on this computer; nothing is uploaded until an explicit import)
+    pub shared_mode: String,
+    /// Path of the shared Access database (.accdb). Per workstation; never created automatically.
+    pub shared_db_path: String,
+    /// Minutes between background synchronizations (local changes also trigger one after a few seconds).
+    pub shared_sync_minutes: u32,
 }
 
 pub const DEFAULT_PROMPT_INSTRUCTIONS: &str = "Please draft a concise, professional NJIIS Help Desk reply to the email below.
@@ -94,11 +101,40 @@ impl Default for Settings {
             archive_mailbox_name: String::new(),
             prompt_instructions: DEFAULT_PROMPT_INSTRUCTIONS.into(),
             notify_account: String::new(),
+            shared_mode: "shared".into(),
+            shared_db_path: crate::shared_store::DEFAULT_SHARED_PATH.into(),
+            shared_sync_minutes: 2,
         }
     }
 }
 
 pub const ALLOWED_INTERVALS: &[u32] = &[1, 5, 10, 15, 30];
+
+/// Shared database settings rules: an Access file (.accdb/.mdb), never inside a OneDrive-synchronized
+/// folder (OneDrive copies a live Access file while it is in use and can corrupt or fork it).
+pub fn validate_shared(mode: &str, path: &str) -> AppResult<()> {
+    if mode != "shared" && mode != "standalone" {
+        return Err(AppError::coded("INVALID", "Shared database mode must be Shared or Standalone"));
+    }
+    let p = path.trim();
+    if p.is_empty() {
+        if mode == "shared" {
+            return Err(AppError::coded("INVALID", "Enter the shared database path, or choose Standalone mode."));
+        }
+        return Ok(());
+    }
+    let lower = p.to_lowercase();
+    if !(lower.ends_with(".accdb") || lower.ends_with(".mdb")) {
+        return Err(AppError::coded("INVALID", "The shared database must be a Microsoft Access file (.accdb)."));
+    }
+    if lower.contains("\\onedrive") || lower.contains("\\onedrive -") || lower.contains("/onedrive") || lower.split(['\\', '/']).any(|seg| seg.starts_with("onedrive")) {
+        return Err(AppError::coded("INVALID", "Do not use a OneDrive-synchronized folder for the live shared database. Use the network share."));
+    }
+    if p.contains(['|', '<', '>', '"', '\n']) {
+        return Err(AppError::coded("INVALID", "The path contains characters that are not allowed."));
+    }
+    Ok(())
+}
 
 impl Settings {
     pub fn validate(&self) -> AppResult<()> {
@@ -131,6 +167,10 @@ impl Settings {
         }
         if self.prompt_instructions.len() > 20_000 {
             return Err(AppError::coded("INVALID", "Prompt instructions are too long"));
+        }
+        validate_shared(&self.shared_mode, &self.shared_db_path)?;
+        if self.shared_sync_minutes == 0 || self.shared_sync_minutes > 60 {
+            return Err(AppError::coded("INVALID", "Shared database sync interval must be 1-60 minutes"));
         }
         Ok(())
     }

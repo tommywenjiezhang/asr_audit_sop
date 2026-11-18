@@ -15,11 +15,15 @@ export interface TicketSummary {
   first_received_at?: string; completed_at?: string; needs_review: boolean; low_confidence: boolean; issue_count?: number;
   assignee_staff_id?: number | null; assignee_name?: string | null; assigned_at?: string | null; ownership_conflict: boolean;
   scope_state: "current" | "history" | "unverified"; scope_reason?: string | null; ticket_ref?: string | null; in_scope_count?: number;
+  /** shared-database state of this case */
+  sync_state: SyncState; review_reason?: string | null;
 }
+export type SyncState = "local" | "pending" | "synced" | "conflict" | "failed";
 export interface Ticket extends TicketSummary {
   issue_type_source: string; classification_confidence?: number; conversation_id?: string; internal_notes?: string;
   resolution_notes?: string; source: string; created_at: string; last_response_at?: string; staff_actions?: string; last_prompt_at?: string;
   scope_changed_at?: string | null;
+  shared_version: number; shared_state: "local_only" | "queued" | "shared"; shared_refreshed_at?: string | null;
 }
 export interface IssueRow { issue_type: string; source: string; position: number }
 export interface CompletionRow {
@@ -27,16 +31,16 @@ export interface CompletionRow {
 }
 export interface CompletionOutcome { done: boolean; flagged: number; moved: number; failed: { message_id: number; subject: string; error: string }[]; dest_path: string }
 export interface ListQuery {
-  view?: string; status?: string; assignee?: string; reason?: string; school?: string; sender?: string; min_age_days?: number;
+  view?: string; sync?: string; status?: string; assignee?: string; reason?: string; school?: string; sender?: string; min_age_days?: number;
   assigned_from?: string; assigned_to?: string;
   search?: string; issue_type?: string; received_from?: string; received_to?: string;
   completed_from?: string; completed_to?: string; sort?: string; limit?: number; offset?: number;
 }
 export interface Staff {
   id: number; display_name: string; email: string; mailbox_name?: string | null; store_id: string; folder_entry_id: string;
-  folder_path: string; active: boolean; created_at: string; updated_at: string;
+  folder_path: string; active: boolean; created_at: string; updated_at: string; shared_id?: string | null; windows_account?: string | null;
 }
-export interface StaffInput { id?: number | null; display_name: string; email: string; mailbox_name: string; store_id: string; folder_entry_id: string; folder_path: string }
+export interface StaffInput { id?: number | null; display_name: string; email: string; mailbox_name: string; store_id: string; folder_entry_id: string; folder_path: string; windows_account: string }
 export interface AssignPreview { ticket_id: number; display_id: string; from_name?: string | null; to: Staff; emails: number; already_in_folder: number; will_notify: boolean; blocked?: string | null }
 export interface MoveFailure { message_id: number; subject: string; error: string }
 export interface AssignOutcome {
@@ -83,7 +87,36 @@ export interface HistoryRow { id: number; at: string; actor: string; action: str
 export interface TicketDetail {
   ticket: Ticket; fields: TicketField[]; messages: MessageRow[]; history: HistoryRow[];
   issues: IssueRow[]; schools: number[]; completion: CompletionRow[]; assignments: AssignmentOp[];
+  notes: Note[]; ownership: OwnershipRow[]; completions: CompletionDecision[]; conflicts: LocalConflict[]; pending_ops: OpRow[];
 }
+export interface Note { note_id: string; author_name: string; body: string; created_at: string; updated_at: string; origin: string; sync_state: "" | "pending" | "conflict" }
+export interface OwnershipRow { staff_name?: string | null; started_at: string; ended_at?: string | null; started_by?: string | null; start_reason?: string | null; end_reason?: string | null; origin: string }
+export interface CompletionDecision { completion_id: string; actor_name?: string | null; decided_at: string; covered: number; state: string; state_reason?: string | null }
+export interface LocalConflict {
+  conflict_id: string; op_id: string; ticket_id?: number | null; ticket_ref?: string | null; field_name?: string | null; conflict_type: string;
+  original_value?: string | null; proposed_value?: string | null; shared_value?: string | null; reason?: string | null;
+  status: "open" | "resolving" | "resolved"; op_type?: string | null; staff_name?: string | null; created_at: string;
+}
+export interface OpRow { op_id: string; op_type: string; state: string; created_at: string; attempts: number; last_error?: string | null; hold_reason?: string | null; staff_name: string }
+export interface QueueSummary { pending: number; held: number; conflicts: number; rejected: number; isolated: number; oldest_pending_at?: string | null; last_error?: string | null }
+export interface DbIdentity { database_id: string; display_name: string; environment: string; schema_version: number; min_client_protocol: number; maintenance: boolean; maintenance_message: string; created_at: string }
+export interface CycleReport {
+  identity?: DbIdentity | null; binding: string; writable: boolean; pushed: number; accepted: number; conflicts: number; rejected: number;
+  replayed: number; pulled: number; staff: number; full_reconcile: boolean; held: number; elapsed_ms: number;
+}
+export interface SharedStatus {
+  mode: "shared" | "standalone"; path: string;
+  state: "standalone" | "not_checked" | "connected" | "read_only" | "unavailable" | "driver_missing" | "locked" | "no_permission" | "incompatible" | "maintenance" | "identity_changed" | "error";
+  reachable?: boolean | null; readable?: boolean | null; writable?: boolean | null;
+  database_id?: string | null; database_name?: string | null; environment?: string | null; schema_version?: number | null; compatibility?: string | null;
+  app_schema_version: number; bound_database_id?: string | null; bound_database_name?: string | null; driver?: string | null;
+  error_code?: string | null; error_message?: string | null; provider_detail?: string | null;
+  last_success_at?: string | null; last_attempt_at?: string | null; next_attempt_at?: string | null;
+  queue: QueueSummary; running: boolean; last_report?: CycleReport | null; consecutive_failures: number;
+}
+export interface ImportPreview { local_only: number; with_message_id: number; without_message_id: number; done: number; open: number; staff: number; already_shared?: number | null; held_ops: number }
+export interface DiagEvent { id: number; at: string; severity: "info" | "warning" | "error"; component: string; code?: string | null; summary: string; detail?: string | null; correlation?: string | null }
+export const SYNC_LABEL: Record<SyncState, string> = { local: "Local only", pending: "Saved locally — pending sync", synced: "Synced", conflict: "Conflict — review required", failed: "Failed — retry available" };
 export interface ListResult { rows: TicketSummary[]; total: number; counts: [string, number][] }
 export interface Unresolved { key: string; label: string; known: boolean }
 export interface DraftCheck { unresolved: Unresolved[]; unverified_claims: string[]; sop_status?: string; sop_reference?: string }
@@ -110,7 +143,7 @@ export interface Settings {
   python_path: string; staff_name: string; default_assigned_staff: string; asr_deadline: string; internal_senders: string[];
   duplicate_window_days: number; open_outlook_draft_after_create: boolean;
   scan_mode: "all" | "unread"; archive_folder: FolderRef | null; archive_mailbox_name: string; prompt_instructions: string;
-  notify_account: string;
+  notify_account: string; shared_mode: "shared" | "standalone"; shared_db_path: string; shared_sync_minutes: number;
 }
 export interface IngestReport { seen: number; new_messages: number; already_imported: number; moved: number; created_tickets: number; updated_tickets: number; skipped_internal: number; duplicates_flagged: number }
 export interface SyncStatus {
@@ -209,6 +242,23 @@ export const api = {
   backup: (path: string) => invoke<void>("db_backup", { path }),
   restore: (path: string) => invoke<string>("db_restore", { path }),
   appInfo: () => invoke<AppInfo>("app_info"),
+
+  sharedStatus: () => invoke<SharedStatus>("shared_status"),
+  sharedTest: () => invoke<SharedStatus>("shared_test_connection"),
+  sharedSyncNow: () => invoke<SharedStatus>("shared_sync_now"),
+  sharedSaveConfig: (mode: string, path: string, minutes: number | null) => invoke<Settings>("shared_save_config", { mode, path, minutes }),
+  sharedReleaseHeld: () => invoke<number>("shared_release_held"),
+  sharedDiscardHeld: () => invoke<number>("shared_discard_held"),
+  sharedSwitchDatabase: (databaseId: string) => invoke<number>("shared_switch_database", { databaseId }),
+  sharedImportPreview: () => invoke<ImportPreview>("shared_import_preview"),
+  sharedImportRun: (limit: number | null) => invoke<number>("shared_import_run", { limit }),
+  sharedCreateDatabase: (path: string, name: string, environment: string) => invoke<DbIdentity>("shared_create_database", { path, name, environment }),
+  notesAdd: (ticketId: number, body: string) => invoke<Note>("notes_add", { ticketId, body }),
+  notesEdit: (noteId: string, body: string) => invoke<void>("notes_edit", { noteId, body }),
+  notesDelete: (noteId: string) => invoke<void>("notes_delete", { noteId }),
+  conflicts: (ticketId: number | null, includeResolved: boolean) => invoke<LocalConflict[]>("conflicts_list", { ticketId, includeResolved }),
+  conflictAcceptShared: (conflictId: string) => invoke<void>("conflict_accept_shared", { conflictId }),
+  diagRecent: (minSeverity: string, limit: number) => invoke<DiagEvent[]>("diag_recent", { minSeverity, limit }),
 };
 
 // ------------------------------------------------------------ helpers

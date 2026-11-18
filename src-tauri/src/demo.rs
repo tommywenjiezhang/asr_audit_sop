@@ -76,7 +76,7 @@ fn write_docs_fixtures() {
     // staff and their folders (owner of an email = staff folder it is in, including subfolders)
     let staff_input = |name: &str, email: &str, id: &str, path: &str| crate::staff::StaffInput {
         id: None, display_name: name.into(), email: email.into(), mailbox_name: "Help Desk Shared Mailbox (demo)".into(),
-        store_id: STORE.into(), folder_entry_id: id.into(), folder_path: path.into(),
+        store_id: STORE.into(), folder_entry_id: id.into(), folder_path: path.into(), windows_account: String::new(),
     };
     let sam = crate::staff::save(&c, &staff_input("Sam Staff", "sam.staff@helpdesk.example.gov", "F-MY", "Inbox/My Folder")).unwrap();
     let ta = crate::staff::save(&c, &staff_input("Teammate A", "teammate.a@helpdesk.example.gov", "F-TA", "Inbox/Teammate A")).unwrap();
