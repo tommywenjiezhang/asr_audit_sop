@@ -196,6 +196,8 @@ export interface FolderRef { store_id: string; entry_id: string; path: string }
 export interface Settings {
   mailbox_name: string; mailbox_store_id: string; folder: FolderRef | null; subfolder_mode: string; selected_subfolders: FolderRef[];
   selected_with_children: string[];
+  /** folders (and their subtrees) never scanned, e.g. "Inbox/NJIIS Team/Completed"; missing in older settings */
+  excluded_folders: FolderRef[];
   sync_enabled: boolean; interval_minutes: number; check_on_startup: boolean; launch_at_login: boolean; close_to_tray: boolean;
   initial_lookback_days: number; overlap_minutes: number; full_rescan_hours: number; max_messages_per_sync: number; body_max_chars: number;
   python_path: string; staff_name: string; default_assigned_staff: string; asr_deadline: string; internal_senders: string[];
@@ -208,7 +210,25 @@ export interface SyncStatus {
   running: boolean; last_run_at?: string; last_success_at?: string; last_error?: string; last_error_code?: string;
   last_report?: IngestReport; next_run_at?: string; folder_display?: string; warnings: string[];
 }
-export interface FolderNode { name: string; entry_id: string; store_id: string; path: string; children: FolderNode[] }
+export interface FolderNode {
+  name: string; entry_id: string; store_id: string; path: string; children: FolderNode[];
+  /** full Outlook path incl. mailbox, e.g. \Mailbox\Inbox\Wenjie */
+  outlook_path?: string; parent_entry_id?: string; parent_store_id?: string;
+  /** Outlook DefaultItemType (0 = mail) */
+  item_type?: number | null; unread_count?: number | null;
+  /** false = the folder exists but cannot be opened (no permission) */
+  accessible?: boolean;
+  /** set when this folder's subfolders could not be read (never shown as "no child folders") */
+  error?: string | null; error_detail?: string;
+  child_count?: number; has_children?: boolean;
+  /** false = below the discovery depth or unreadable: children not listed here */
+  children_loaded?: boolean;
+}
+export interface FolderDiscovery {
+  hierarchy_source: string; mapi_error?: string | null; immediate_children: number; descendants: number; problems: number;
+  repaired: string[]; errors: string[]; elapsed_ms: number; log: string[];
+}
+export interface FolderListing { store_id: string; mailbox?: string; root: FolderNode; discovery?: FolderDiscovery }
 export interface Report {
   total: number; open: number; by_status: [string, number][]; by_issue: [string, string, number][]; by_school_verification: [string, number][];
   created_last_7_days: number; created_last_30_days: number; open_older_than_7_days: number; followups_due: number;
@@ -296,7 +316,7 @@ export const api = {
   outlookTest: () => invoke<Record<string, unknown>>("outlook_test"),
   mailboxes: () => invoke<{ mailboxes: { display_name: string; store_id: string }[] }>("outlook_list_mailboxes"),
   folders: (storeId: string | null, sharedMailbox: string | null, rootEntryId: string | null = null) =>
-    invoke<{ store_id: string; root: FolderNode }>("outlook_list_folders", { storeId, sharedMailbox, rootEntryId }),
+    invoke<FolderListing>("outlook_list_folders", { storeId, sharedMailbox, rootEntryId }),
   syncNow: () => invoke<{ report: IngestReport; warnings: string[]; folders: number }>("sync_now"),
   syncStatus: () => invoke<SyncStatus>("sync_status"),
 

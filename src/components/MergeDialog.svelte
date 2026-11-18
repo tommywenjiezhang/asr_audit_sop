@@ -4,7 +4,13 @@
   /** Combine `sources` into `target`. Nothing changes until "Combine" is pressed. */
   let { target, sources: initial = [], onclose, ondone }: { target: number; sources?: number[]; onclose: () => void; ondone: () => void } = $props();
 
-  let sources = $state<number[]>([...initial]);
+  // Initialize from the prop in an effect so Svelte does not capture a stale
+  // prop value in the $state initializer. The dialog's source list remains
+  // locally editable after this initial synchronization.
+  let sources = $state<number[]>([]);
+  $effect(() => {
+    sources = [...initial];
+  });
   let add = $state("");
   let preview = $state<MergePreview | null>(null);
   let err = $state("");

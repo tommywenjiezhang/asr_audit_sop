@@ -221,6 +221,20 @@ class OutlookSession:
         self.app = None
         self.ns = None
         self._pythoncom = None
+        self._hierarchy = None
+        # folder-discovery counters/log for this request (returned in diagnostics; never contains mail content)
+        self.folder_stats = new_folder_stats()
+
+    def hierarchy(self):
+        """The Extended MAPI hierarchy reader (created on first use; None-safe: check .available)."""
+        if self._hierarchy is None:
+            self._hierarchy = make_hierarchy(self.ns)
+            st = self.folder_stats
+            st["hierarchy_source"] = "outlook+mapi" if self._hierarchy.available else "outlook"
+            if not self._hierarchy.available:
+                st["mapi_error"] = self._hierarchy.error
+                folder_log(st, "WARN", f"Extended MAPI unavailable ({self._hierarchy.error}); using the Outlook object model only")
+        return self._hierarchy
 
     def __enter__(self):
         try:
@@ -250,6 +264,12 @@ class OutlookSession:
         return self
 
     def __exit__(self, *exc):
+        if self._hierarchy is not None:
+            try:
+                self._hierarchy.close()
+            except Exception:  # noqa: BLE001
+                pass
+            self._hierarchy = None
         self.ns = None
         self.app = None
         if self._pythoncom is not None:
@@ -283,20 +303,267 @@ def find_by_path(root, path: str):
     return f
 
 
-def folder_tree(folder, store_id: str, depth: int, max_depth: int, base: str = "") -> dict:
+# --------------------------------------------------------------------------- folder hierarchy
+#
+# Root cause of "This folder has no child folders" on a shared (delegate) mailbox: for some Exchange
+# delegate stores opened in online mode, Outlook returns an EMPTY Folders collection (Count = 0,
+# PR_SUBFOLDERS = False) for a folder that does have subfolders - seen live on the team mailbox Inbox,
+# whatever route was used to reach it (Store.GetDefaultFolder, root folder -> "Inbox",
+# GetSharedDefaultFolder, GetFolderFromID). The folder's hierarchy table, opened with the entry ID its
+# PARENT's hierarchy table hands out, lists the subfolders correctly. So child folders are read from
+# both sources: the object model's Folders collection and Extended MAPI hierarchy tables obtained
+# through Outlook's own session (Namespace.MAPIOBJECT - no second logon, no profile prompt).
+# Everything here only reads: folders are opened read-only, nothing is created, changed or moved.
+
+FOLDER_LOG_LIMIT = 400
+OL_FOLDER_CLASS = 2
+
+
+def new_folder_stats() -> dict:
+    return {"hierarchy_source": "", "folders_listed": 0, "mapi_added": 0, "repaired": [], "errors": [], "log": []}
+
+
+def folder_log(stats, level: str, text: str) -> None:
+    if stats is None:
+        return
+    log = stats.setdefault("log", [])
+    if len(log) < FOLDER_LOG_LIMIT:
+        log.append(f"[{level}] {text}")
+    elif len(log) == FOLDER_LOG_LIMIT:
+        log.append("[INFO] (log truncated)")
+
+
+def describe_exc(exc) -> str:
+    """Exception type plus HRESULT (when COM supplied one); never the message text of an item."""
+    hresult = getattr(exc, "hresult", None)
+    if hresult is None and getattr(exc, "args", None) and isinstance(exc.args[0], int):
+        hresult = exc.args[0]
+    name = type(exc).__name__
+    return f"{name} 0x{hresult & 0xFFFFFFFF:08X}" if isinstance(hresult, int) else name
+
+
+class FolderListError(Exception):
+    """Neither the object model nor MAPI could list a folder's subfolders."""
+
+
+class MapiHierarchy:
+    """Child-folder rows from Extended MAPI hierarchy tables, through Outlook's own MAPI session."""
+
+    PR_ATTR_HIDDEN = 0x10F4000B
+    PR_CONTENT_UNREAD = 0x36030003
+
+    def __init__(self, ns):
+        self.ns = ns
+        self.available = False
+        self.error = ""
+        self._mapi = None
+        self._sess = None
+        self._stores = {}
+        self._table_ids = {}   # (store_id, OOM EntryID) -> entry ID the parent's hierarchy table handed out
+        try:
+            from win32com.mapi import mapi, mapitags  # type: ignore  # part of pywin32
+            mapi.MAPIInitialize(None)
+            self._mapi, self._tags = mapi, mapitags
+            self._sess = ns.MAPIOBJECT.QueryInterface(mapi.IID_IMAPISession)
+            self.available = True
+        except Exception as exc:  # noqa: BLE001
+            self.error = describe_exc(exc)
+
+    def close(self):
+        self._stores.clear()
+        self._table_ids.clear()
+        self._sess = None
+        if self._mapi is not None:
+            try:
+                self._mapi.MAPIUninitialize()
+            except Exception:  # noqa: BLE001
+                pass
+            self._mapi = None
+
+    def _store(self, store_id: str):
+        st = self._stores.get(store_id)
+        if st is None:
+            m = self._mapi
+            # MAPI_BEST_ACCESS is required to open a delegate store at all; folders are opened read-only below
+            st = self._sess.OpenMsgStore(0, bytes.fromhex(store_id), None, m.MDB_NO_DIALOG | m.MAPI_BEST_ACCESS)
+            self._stores[store_id] = st
+        return st
+
+    def rows(self, store_id: str, table_eid: bytes) -> list:
+        t = self._tags
+        folder = self._store(store_id).OpenEntry(table_eid, None, 0)  # 0 = read-only
+        table = folder.GetHierarchyTable(0)
+        table.SetColumns((t.PR_DISPLAY_NAME_W, t.PR_ENTRYID, self.PR_ATTR_HIDDEN, self.PR_CONTENT_UNREAD), 0)
+        out = []
+        while True:
+            batch = table.QueryRows(100, 0)
+            if not batch:
+                break
+            for row in batch:
+                vals = {}
+                for tag, val in row:
+                    if t.PROP_TYPE(tag) != t.PT_ERROR:
+                        vals[t.PROP_ID(tag)] = val
+                name = vals.get(t.PROP_ID(t.PR_DISPLAY_NAME_W))
+                eid = vals.get(t.PROP_ID(t.PR_ENTRYID))
+                if not name or not eid:
+                    continue
+                out.append({"name": name, "eid": eid, "hidden": bool(vals.get(t.PROP_ID(self.PR_ATTR_HIDDEN), False)),
+                            "unread": vals.get(t.PROP_ID(self.PR_CONTENT_UNREAD))})
+        return out
+
+    def long_term_id(self, store_id: str, table_eid: bytes) -> str:
+        f = self._store(store_id).OpenEntry(table_eid, None, 0)
+        return f.GetProps((self._tags.PR_ENTRYID,), 0)[1][0][1].hex().upper()
+
+    def remember(self, store_id: str, entry_id: str, table_eid: bytes) -> None:
+        if store_id and entry_id:
+            self._table_ids[(store_id, entry_id)] = table_eid
+
+    def table_id(self, folder) -> bytes:
+        """Entry ID to open `folder`'s hierarchy table with: the store root's own ID, then down the folder's
+        ancestor chain via each parent's hierarchy table (sibling folder names are unique in Outlook)."""
+        sid, fid = safe(folder, "StoreID", ""), safe(folder, "EntryID", "")
+        known = self._table_ids.get((sid, fid))
+        if known is not None:
+            return known
+        chain = [folder]
+        for _ in range(30):
+            parent = safe(chain[-1], "Parent")
+            if parent is None or safe(parent, "Class", 0) != OL_FOLDER_CLASS:
+                break
+            chain.append(parent)
+        chain.reverse()  # store root first
+        cur = bytes.fromhex(safe(chain[0], "EntryID", ""))
+        self.remember(sid, safe(chain[0], "EntryID", ""), cur)
+        for f in chain[1:]:
+            k = (sid, safe(f, "EntryID", ""))
+            if k in self._table_ids:
+                cur = self._table_ids[k]
+                continue
+            want = (safe(f, "Name", "") or "").lower()
+            match = next((r for r in self.rows(sid, cur) if r["name"].lower() == want), None)
+            if match is None:
+                raise LookupError("folder not found in its parent's hierarchy table")
+            cur = match["eid"]
+            self.remember(sid, k[1], cur)
+        return cur
+
+
+def make_hierarchy(ns):
+    """Factory (tests replace it with a fake)."""
+    return MapiHierarchy(ns)
+
+
+def child_folders(s, folder, stats=None):
+    """Immediate subfolders of `folder` (all item types) as Outlook folder objects, plus problems
+    [{"name", "error"}] for subfolders that exist but cannot be opened.
+    Raises FolderListError only if no source could list the subfolders."""
+    if stats is None and s is not None:
+        stats = s.folder_stats
+    sid, fid = safe(folder, "StoreID", ""), safe(folder, "EntryID", "")
+    subs, by_name, problems = [], {}, []
+    oom_error = None
+    try:
+        col = folder.Folders
+        for i in range(1, int(col.Count) + 1):  # Outlook collections are 1-based
+            sub = col.Item(i)
+            subs.append(sub)
+            by_name[(safe(sub, "Name", "") or "").lower()] = sub
+    except Exception as exc:  # noqa: BLE001
+        oom_error = describe_exc(exc)
+    oom_count = len(subs)
+    h = s.hierarchy() if s is not None else None
+    mapi_error = None
+    if h is not None and h.available and sid and fid:
+        try:
+            for row in h.rows(sid, h.table_id(folder)):
+                known = by_name.get(row["name"].lower())
+                if known is not None:
+                    h.remember(sid, safe(known, "EntryID", ""), row["eid"])
+                    continue
+                if row["hidden"]:
+                    continue
+                try:
+                    sub = s.ns.GetFolderFromID(h.long_term_id(sid, row["eid"]), sid)
+                except Exception as exc:  # noqa: BLE001
+                    problems.append({"name": row["name"], "error": describe_exc(exc)})
+                    continue
+                h.remember(sid, safe(sub, "EntryID", ""), row["eid"])
+                subs.append(sub)
+                by_name[row["name"].lower()] = sub
+        except Exception as exc:  # noqa: BLE001
+            mapi_error = describe_exc(exc)
+    elif h is None or not h.available:
+        mapi_error = "unavailable"
+    added = len(subs) - oom_count
+    where = folder_path(folder) or safe(folder, "Name", "?")
+    if stats is not None:
+        stats["folders_listed"] = stats.get("folders_listed", 0) + 1
+        if added:
+            stats["mapi_added"] = stats.get("mapi_added", 0) + added
+            stats.setdefault("repaired", []).append(where)
+            folder_log(stats, "WARN", f"Outlook listed {oom_count} subfolder(s) of '{where}'; the MAPI hierarchy table found {added} more")
+        for p in problems:
+            stats.setdefault("errors", []).append(f"'{where}/{p['name']}': {p['error']}")
+            folder_log(stats, "ERROR", f"Subfolder '{where}/{p['name']}' cannot be opened ({p['error']})")
+        if mapi_error and mapi_error != "unavailable":
+            folder_log(stats, "WARN", f"MAPI hierarchy of '{where}' unreadable ({mapi_error}); used Outlook's list")
+    if oom_error and mapi_error:
+        if stats is not None:
+            stats.setdefault("errors", []).append(f"'{where}': subfolders unreadable ({oom_error})")
+            folder_log(stats, "ERROR", f"Subfolders of '{where}' could not be read ({oom_error})")
+        raise FolderListError(f"subfolders of '{where}' could not be read ({oom_error})")
+    return subs, problems
+
+
+def is_mail_folder(folder) -> bool:
+    return safe(folder, "DefaultItemType", 0) == 0  # olMailItem
+
+
+def folder_tree(s, folder, store_id: str, depth: int, max_depth: int, base: str = "", parent_id: str = "") -> dict:
+    """Serializable folder metadata (no live COM object leaves the worker), mail folders only."""
     name = safe(folder, "Name", "?")
     path = f"{base}/{name}" if base else name
-    node = {"name": name, "entry_id": safe(folder, "EntryID", ""), "store_id": store_id, "path": path, "children": []}
+    stats = s.folder_stats if s is not None else None
+    node = {"name": name, "entry_id": safe(folder, "EntryID", ""), "store_id": store_id, "path": path,
+            "outlook_path": safe(folder, "FolderPath", "") or "", "parent_entry_id": parent_id,
+            "parent_store_id": store_id if parent_id else "", "item_type": safe(folder, "DefaultItemType", 0),
+            "unread_count": safe(folder, "UnReadItemCount", None), "accessible": True, "error": None,
+            "child_count": 0, "has_children": False, "children_loaded": depth < max_depth, "children": []}
+    try:
+        subs, problems = child_folders(s, folder)
+    except FolderListError as exc:
+        node["error"] = "Subfolders could not be read"
+        node["error_detail"] = str(exc)
+        node["children_loaded"] = False
+        return node
+    mail = [f for f in subs if is_mail_folder(f)]
+    node["child_count"] = len(mail) + len(problems)
+    node["has_children"] = node["child_count"] > 0
+    folder_log(stats, "INFO", f"'{folder_path(folder) or name}': {node['child_count']} child folder(s)")
     if depth < max_depth:
-        try:
-            for i in range(1, int(folder.Folders.Count) + 1):
-                sub = folder.Folders.Item(i)
-                # only mail folders (DefaultItemType 0 = olMailItem)
-                if safe(sub, "DefaultItemType", 0) == 0:
-                    node["children"].append(folder_tree(sub, store_id, depth + 1, max_depth, path))
-        except Exception:  # noqa: BLE001
-            node["error"] = "subfolders unavailable"
+        for sub in mail:
+            node["children"].append(folder_tree(s, sub, store_id, depth + 1, max_depth, path, node["entry_id"]))
+        for p in problems:
+            node["children"].append({"name": p["name"], "entry_id": "", "store_id": store_id, "path": f"{path}/{p['name']}",
+                                     "outlook_path": "", "parent_entry_id": node["entry_id"], "parent_store_id": store_id,
+                                     "item_type": None, "unread_count": None, "accessible": False,
+                                     "error": "No access (or the folder cannot be opened)", "error_detail": p["error"],
+                                     "child_count": 0, "has_children": False, "children_loaded": True, "children": []})
     return node
+
+
+def tree_counts(node: dict) -> tuple:
+    """(descendant folders, inaccessible or unreadable folders) below `node`."""
+    n, bad = 0, 0
+    for c in node.get("children", []):
+        n += 1
+        if not c.get("accessible", True) or c.get("error"):
+            bad += 1
+        cn, cb = tree_counts(c)
+        n, bad = n + cn, bad + cb
+    return n, bad
 
 
 # --------------------------------------------------------------------------- operations (real Outlook)
@@ -329,45 +596,104 @@ def op_list_mailboxes(s: OutlookSession, p: dict) -> dict:
     return {"mailboxes": out}
 
 
+def store_by_name(ns, name: str):
+    want = name.strip().lower()
+    for i in range(1, int(ns.Stores.Count) + 1):
+        st = ns.Stores.Item(i)
+        if (safe(st, "DisplayName", "") or "").strip().lower() == want:
+            return st
+    return None
+
+
 def op_list_folders(s: OutlookSession, p: dict) -> dict:
-    max_depth = int(p.get("max_depth", 6))
+    started = time.perf_counter()
+    max_depth = max(1, min(int(p.get("max_depth", 12)), 20))
+    stats = s.folder_stats
+    folder_log(stats, "INFO", "Connected to the Outlook MAPI namespace")
     root_id = (p.get("root_entry_id") or "").strip()
+    shared = (p.get("shared_mailbox") or "").strip()
+    store_id = (p.get("store_id") or "").strip()
     if root_id:
         # only the subtree of one folder (fast: skips unrelated folders of the mailbox)
         try:
-            folder = s.ns.GetFolderFromID(root_id, p.get("store_id") or None)
-        except Exception:  # noqa: BLE001
-            raise WorkerError("FOLDER_NOT_FOUND", "The monitored folder was not found (renamed, moved, deleted or no access).")
-        store_id = safe(folder, "StoreID", p.get("store_id", ""))
+            folder = s.ns.GetFolderFromID(root_id, store_id or None)
+        except Exception as exc:  # noqa: BLE001
+            raise WorkerError("FOLDER_NOT_FOUND", "The monitored folder was not found (renamed, moved, deleted or no access).",
+                              detail=describe_exc(exc))
+        sid = safe(folder, "StoreID", store_id)
+        if store_id and sid and sid != store_id:
+            # never present a folder of another mailbox as the selected one
+            raise WorkerError("FOLDER_NOT_FOUND", "The folder now belongs to a different mailbox. Choose it again in Settings.")
+        mailbox = safe(safe(folder, "Store"), "DisplayName", "") or ""
         base = folder_path(folder)
         parent = base.rsplit("/", 1)[0] if "/" in base else ""
-        return {"store_id": store_id, "root": folder_tree(folder, store_id, 0, min(max_depth, 4), parent)}
-    shared = (p.get("shared_mailbox") or "").strip()
+        folder_log(stats, "INFO", f"Enumerating '{base}' in mailbox '{mailbox}'")
+        root = folder_tree(s, folder, sid, 0, max_depth, parent, (folder_ancestors(folder) or [""])[0])
+        root["path"] = base
+        return finish_listing(s, root, sid, mailbox, started)
     if shared:
-        # mailbox not added as a store: open its Inbox via the recipient
-        rec = s.ns.CreateRecipient(shared)
-        if not rec.Resolve():
-            raise WorkerError("MAILBOX_NOT_FOUND", f"The mailbox '{shared}' could not be resolved in the address book.")
-        try:
-            inbox = s.ns.GetSharedDefaultFolder(rec, OL_FOLDER_INBOX)
-        except Exception as exc:  # noqa: BLE001
-            raise WorkerError("ACCESS_DENIED", "You do not have access to that mailbox's Inbox.", detail=type(exc).__name__)
-        store_id = safe(inbox, "StoreID", "")
-        return {"store_id": store_id, "root": folder_tree(inbox, store_id, 0, max_depth)}
-    store_id = p.get("store_id") or ""
-    st = store_by_id(s.ns, store_id) if store_id else s.ns.DefaultStore
+        # a mailbox mounted in this profile shows its whole folder tree; prefer it over the recipient lookup
+        st = store_by_name(s.ns, shared)
+        if st is None:
+            return list_shared_inbox(s, shared, max_depth, started)
+        folder_log(stats, "INFO", f"Mailbox '{shared}' found among the mailboxes of this Outlook profile")
+    elif store_id:
+        st = store_by_id(s.ns, store_id)
+    else:
+        st = s.ns.DefaultStore
     if st is None:
         raise WorkerError("MAILBOX_NOT_FOUND", "The selected mailbox is no longer available in this Outlook profile.")
-    root = st.GetRootFolder()
     sid = safe(st, "StoreID", store_id)
-    tree = folder_tree(root, sid, 0, max_depth)
+    mailbox = safe(st, "DisplayName", "") or ""
+    folder_log(stats, "INFO", f"Mailbox '{mailbox}' resolved (store ...{sid[-12:]})")
+    try:
+        top = st.GetRootFolder()
+    except Exception as exc:  # noqa: BLE001
+        raise WorkerError("ACCESS_DENIED", "The folder list of that mailbox cannot be opened.", detail=describe_exc(exc))
+    root = folder_tree(s, top, sid, 0, max_depth)
+
     # present paths relative to the store root ("Inbox/Wenjie")
     def strip(node, prefix):
         node["path"] = node["path"][len(prefix) + 1:] if node["path"].startswith(prefix + "/") else ""
         for c in node["children"]:
             strip(c, prefix)
-    strip(tree, tree["name"])
-    return {"store_id": sid, "root": tree}
+    strip(root, root["name"])
+    return finish_listing(s, root, sid, mailbox, started)
+
+
+def list_shared_inbox(s: OutlookSession, shared: str, max_depth: int, started: float) -> dict:
+    """Mailbox not mounted in this profile: open its Inbox through the address book (delegate access)."""
+    stats = s.folder_stats
+    rec = s.ns.CreateRecipient(shared)
+    if not rec.Resolve():
+        raise WorkerError("MAILBOX_NOT_FOUND", f"The mailbox '{shared}' could not be resolved in the address book.")
+    try:
+        inbox = s.ns.GetSharedDefaultFolder(rec, OL_FOLDER_INBOX)
+    except Exception as exc:  # noqa: BLE001
+        raise WorkerError("ACCESS_DENIED", "You do not have access to that mailbox's Inbox.", detail=describe_exc(exc))
+    sid = safe(inbox, "StoreID", "")
+    mailbox = safe(safe(inbox, "Store"), "DisplayName", "") or shared
+    default_sid = safe(safe(s.ns, "DefaultStore"), "StoreID", "")
+    if sid and sid == default_sid:
+        # the name resolved to YOUR OWN mailbox: never show it as the shared one
+        raise WorkerError("MAILBOX_IS_PERSONAL", f"'{shared}' resolved to your own mailbox, not a shared one. "
+                          "Use Find Mailboxes, or enter the shared mailbox's exact name or address.")
+    folder_log(stats, "INFO", f"Shared mailbox '{shared}' resolved through the address book (Inbox only)")
+    root = folder_tree(s, inbox, sid, 0, max_depth)
+    return finish_listing(s, root, sid, mailbox, started)
+
+
+def finish_listing(s: OutlookSession, root: dict, store_id: str, mailbox: str, started: float) -> dict:
+    stats = s.folder_stats
+    descendants, bad = tree_counts(root)
+    elapsed = round((time.perf_counter() - started) * 1000)
+    folder_log(stats, "INFO", f"Folder discovery completed: {descendants} folder(s) below '{root['path'] or root['name']}', "
+                              f"{bad} with problems, {elapsed} ms")
+    return {"store_id": store_id, "mailbox": mailbox, "root": root, "discovery": {
+        "hierarchy_source": stats.get("hierarchy_source") or "outlook", "mapi_error": stats.get("mapi_error"),
+        "immediate_children": len(root["children"]), "descendants": descendants, "problems": bad,
+        "repaired": stats.get("repaired", [])[:50], "errors": stats.get("errors", [])[:50],
+        "elapsed_ms": elapsed, "log": stats.get("log", [])}}
 
 
 def resolve_folder(s: OutlookSession, req: dict):
@@ -410,19 +736,36 @@ def iter_mail(folder, since_utc: str, unread_only: bool = False):
         item = restricted.GetNext()
 
 
-def collect_folders(folder, include_sub: bool, exclude=()):
-    """The folder and (optionally) all its mail subfolders, skipping excluded folders and their subtrees."""
-    if safe(folder, "EntryID", "") in exclude:
+def walk_folders(s, folder, include_sub: bool, exclude=(), errors: list | None = None, _seen=None, warnings: list | None = None):
+    """The folder and (optionally) all its mail subfolders, skipping excluded folders and their subtrees.
+    Subfolders come from child_folders() (object model + MAPI hierarchy tables), so a folder whose
+    Folders collection Outlook reports as empty is still descended into. Subtrees that cannot be read
+    are appended to `errors` - never silently skipped - and each folder is yielded at most once.
+    Subfolders that exist but cannot be opened (no permission) go to `warnings` when given, else `errors`."""
+    fid = safe(folder, "EntryID", "")
+    if fid in exclude:
         return
-    yield folder
-    if include_sub:
-        try:
-            for i in range(1, int(folder.Folders.Count) + 1):
-                sub = folder.Folders.Item(i)
-                if safe(sub, "DefaultItemType", 0) == 0:
-                    yield from collect_folders(sub, True, exclude)
-        except Exception:  # noqa: BLE001
+    seen = set() if _seen is None else _seen
+    if fid:
+        if fid in seen:
             return
+        seen.add(fid)
+    yield folder
+    if not include_sub:
+        return
+    try:
+        subs, problems = child_folders(s, folder)
+    except FolderListError as exc:
+        if errors is not None:
+            errors.append(str(exc))
+        return
+    sink = warnings if warnings is not None else errors
+    if sink is not None:
+        where = folder_path(folder)
+        sink.extend(f"subfolder '{where}/{p['name']}' could not be opened ({p['error']})" for p in problems)
+    for sub in subs:
+        if is_mail_folder(sub):
+            yield from walk_folders(s, sub, True, exclude, errors, seen, warnings)
 
 
 def op_sync_messages(s: OutlookSession, p: dict) -> dict:
@@ -459,7 +802,16 @@ def op_sync_messages(s: OutlookSession, p: dict) -> dict:
             # every message older than the newest one returned has been returned (the caller's watermark
             # relies on this). Capping folder by folder would skip older mail in later subfolders.
             exclude = set(req.get("exclude_entry_ids") or [])
-            folders = list(collect_folders(folder, bool(req.get("include_subfolders")), exclude))
+            folder_errors: list = []
+            folder_warnings: list = []
+            folders = list(walk_folders(s, folder, bool(req.get("include_subfolders")), exclude, folder_errors, None, folder_warnings))
+            res["folders_scanned"] = len(folders)
+            if folder_warnings:
+                res["folder_warnings"] = folder_warnings[:20]
+            if folder_errors:
+                # reported, never silently dropped: the app does not advance this folder's watermark
+                res["incomplete"] = True
+                res["folder_errors"] = folder_errors[:20]
             ancestors = {safe(f, "EntryID", ""): folder_ancestors(f) for f in folders}
             streams = [mail_in(f) for f in folders]
             for _, item, f in heapq.merge(*streams, key=lambda t: t[0]):
@@ -475,6 +827,8 @@ def op_sync_messages(s: OutlookSession, p: dict) -> dict:
     if results and all(not r["ok"] for r in results):
         first = results[0]
         raise WorkerError(first.get("error_code", "COM_ERROR"), first.get("message", "Folder unavailable"), **stats)
+    stats["hierarchy_source"] = s.folder_stats.get("hierarchy_source") or "outlook"
+    stats["subfolders_recovered"] = s.folder_stats.get("mapi_added", 0)
     return {"folders": results, "stats": stats}
 
 
@@ -506,23 +860,6 @@ def find_in_folder(folder, imid: str, errors: list | None = None):
     return None
 
 
-def walk_folders(folder, include_sub: bool, exclude=(), errors: list | None = None):
-    """Like collect_folders, but records folders whose subfolders could not be read."""
-    if safe(folder, "EntryID", "") in exclude:
-        return
-    yield folder
-    if include_sub:
-        try:
-            subs = [folder.Folders.Item(i) for i in range(1, int(folder.Folders.Count) + 1)]
-        except Exception as exc:  # noqa: BLE001
-            if errors is not None:
-                errors.append(f"subfolders of '{folder_path(folder)}' could not be read ({type(exc).__name__})")
-            return
-        for sub in subs:
-            if safe(sub, "DefaultItemType", 0) == 0:
-                yield from walk_folders(sub, True, exclude, errors)
-
-
 def find_item(s: OutlookSession, entry_id: str, store_id: str, imid: str, folders: list, errors: list | None = None):
     """Resolve a message by EntryID; if that fails (EntryIDs change when an item moves between
     folders), search the candidate folders by Internet Message-ID. A candidate with "recursive": true
@@ -548,7 +885,7 @@ def find_item(s: OutlookSession, entry_id: str, store_id: str, imid: str, folder
             if errors is not None:
                 errors.append(f"folder '{f.get('path') or fid[-8:]}' could not be opened ({type(exc).__name__})")
             continue
-        for folder in walk_folders(top, bool(f.get("recursive")), (), errors):
+        for folder in walk_folders(s, top, bool(f.get("recursive")), (), errors):
             key = safe(folder, "EntryID", "")
             if key in searched:
                 continue
@@ -745,7 +1082,7 @@ def op_scope_inventory(s: OutlookSession, p: dict) -> dict:
             out["complete"] = False
             out["errors"].append(f"Folder '{req.get('path', '')}' was not found or is not accessible.")
             continue
-        for f in walk_folders(top, bool(req.get("include_subfolders")), exclude, out["errors"]):
+        for f in walk_folders(s, top, bool(req.get("include_subfolders")), exclude, out["errors"]):
             fid = safe(f, "EntryID", "")
             if fid in seen:
                 continue

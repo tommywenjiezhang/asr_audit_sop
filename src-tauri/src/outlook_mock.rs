@@ -162,6 +162,16 @@ fn relocate(m: &mut Value, root: &Value, dest_id: &str) {
     m["store_id"] = json!(STORE);
 }
 
+fn strings(v: &Value, key: &str) -> Vec<String> {
+    v.get(key).and_then(|a| a.as_array()).map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default()
+}
+
+/// The message lies in an excluded folder or below one (like the real worker's walk, which skips excluded subtrees).
+fn in_excluded(m: &Value, ex: &[String]) -> bool {
+    let anc = m.get("folder_ancestors").and_then(|a| a.as_array()).cloned().unwrap_or_default();
+    ex.iter().any(|x| s(m, "folder_entry_id") == x || anc.iter().any(|a| a.as_str() == Some(x.as_str())))
+}
+
 /// Answer one worker operation from the mock mailbox in `dir`.
 pub fn call(dir: &Path, op: &str, p: &Value) -> AppResult<WorkerResponse> {
     let _l = lock(dir)?;
@@ -186,7 +196,17 @@ pub fn call(dir: &Path, op: &str, p: &Value) -> AppResult<WorkerResponse> {
         "test_connection" => ok(json!({"outlook_version": "mock", "profile": "Mock (test mode)", "default_store": "mock@example.invalid", "store_count": 1})),
         "list_mailboxes" => ok(json!({"mailboxes": [{"display_name": "Mock Shared Mailbox", "store_id": STORE, "exchange_store_type": 1, "is_data_file": false}]})),
         "list_accounts" => ok(json!({"accounts": [{"display_name": "Mock", "smtp": "mock@example.invalid"}]})),
-        "list_folders" => ok(root.clone()),
+        "list_folders" => {
+            let rid = s(p, "root_entry_id");
+            if rid.is_empty() {
+                ok(root.clone())
+            } else {
+                match find_folder(&root["root"], rid) {
+                    Some(f) => ok(json!({"store_id": STORE, "mailbox": "Mock Shared Mailbox", "root": f})),
+                    None => err("FOLDER_NOT_FOUND", "The monitored folder was not found (mock).", ""),
+                }
+            }
+        }
         "validate_folder" => match find_folder(&root["root"], s(p, "entry_id")) {
             Some(f) => ok(json!({"entry_id": s(f, "entry_id"), "store_id": STORE, "path": s(f, "path"), "name": s(f, "name"), "mailbox": "Mock Shared Mailbox"})),
             None => err("FOLDER_NOT_FOUND", "The folder was not found (mock).", ""),
@@ -197,9 +217,11 @@ pub fn call(dir: &Path, op: &str, p: &Value) -> AppResult<WorkerResponse> {
                 let fid = s(&req, "entry_id").to_string();
                 let subs = req.get("include_subfolders").and_then(|v| v.as_bool()).unwrap_or(false);
                 let since = s(&req, "since_utc").to_string();
+                let ex = strings(&req, "exclude_entry_ids");
                 let mut list: Vec<Value> = msgs
                     .iter()
                     .filter(|m| s(m, "folder_entry_id") == fid || (subs && m.get("folder_ancestors").and_then(|a| a.as_array()).map(|a| a.iter().any(|x| x.as_str() == Some(fid.as_str()))).unwrap_or(false)))
+                    .filter(|m| !in_excluded(m, &ex))
                     .filter(|m| since.is_empty() || s(m, "received_at") >= since.as_str())
                     .cloned()
                     .collect();
@@ -215,13 +237,14 @@ pub fn call(dir: &Path, op: &str, p: &Value) -> AppResult<WorkerResponse> {
         "scope_inventory" => {
             let mut items = vec![];
             let mut folders = vec![];
+            let ex = strings(p, "exclude");
             for req in p.get("folders").and_then(|f| f.as_array()).cloned().unwrap_or_default() {
                 let fid = s(&req, "entry_id").to_string();
                 folders.push(json!({"entry_id": fid, "store_id": STORE, "path": s(&req, "path"), "ancestors": ancestors(&root["root"], &fid)}));
                 let subs = req.get("include_subfolders").and_then(|v| v.as_bool()).unwrap_or(false);
                 for m in &msgs {
                     let inside = s(m, "folder_entry_id") == fid || (subs && m.get("folder_ancestors").and_then(|a| a.as_array()).map(|a| a.iter().any(|x| x.as_str() == Some(fid.as_str()))).unwrap_or(false));
-                    if inside {
+                    if inside && !in_excluded(m, &ex) {
                         items.push(json!({"imid": s(m, "internet_message_id"), "entry_id": s(m, "entry_id"), "folder_entry_id": s(m, "folder_entry_id")}));
                     }
                 }

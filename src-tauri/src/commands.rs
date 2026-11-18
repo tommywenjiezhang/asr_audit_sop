@@ -765,16 +765,30 @@ pub async fn outlook_list_mailboxes(state: State<'_, AppState>) -> AppResult<ser
 
 #[tauri::command]
 pub async fn outlook_list_folders(state: State<'_, AppState>, store_id: Option<String>, shared_mailbox: Option<String>, root_entry_id: Option<String>) -> AppResult<serde_json::Value> {
+    use crate::folders::{discovery_event, discovery_failure, DiscoveryGuard, DiscoveryRequest};
+    static RUNNING: std::sync::LazyLock<DiscoveryGuard> = std::sync::LazyLock::new(DiscoveryGuard::default);
+    let req = DiscoveryRequest {
+        store_id: store_id.unwrap_or_default().trim().to_string(),
+        shared_mailbox: shared_mailbox.unwrap_or_default().trim().to_string(),
+        root_entry_id: root_entry_id.unwrap_or_default().trim().to_string(),
+    };
+    let Some(_running) = RUNNING.try_start(&req.key()) else {
+        return Err(AppError::coded("BUSY", format!("The folder list of {} is already being read. Wait for it to finish.", req.describe())));
+    };
     let cfg = sync::worker_config(&state)?;
-    sync::call_with_retry(
-        &cfg,
-        "list_folders",
-        serde_json::json!({"store_id": store_id.unwrap_or_default(), "shared_mailbox": shared_mailbox.unwrap_or_default(),
-            "root_entry_id": root_entry_id.unwrap_or_default(), "max_depth": 6}),
-        Duration::from_secs(120),
-        1,
-    )
-    .await
+    let r = sync::call_with_retry(&cfg, "list_folders", req.params(), Duration::from_secs(300), 1).await;
+    let conn = state.db.lock().unwrap();
+    match &r {
+        Ok(data) => {
+            let (sev, code, summary, detail) = discovery_event(&req, data);
+            crate::diag::record(&conn, sev, "outlook-folders", code, &summary, &detail, "");
+        }
+        Err(e) => {
+            let (sev, summary) = discovery_failure(&req, e.code(), &e.to_string());
+            crate::diag::record(&conn, sev, "outlook-folders", e.code(), &summary, "", "");
+        }
+    }
+    r
 }
 
 #[tauri::command]

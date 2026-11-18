@@ -26,6 +26,8 @@ The app never writes or sends the reply itself, and it does not connect to Copil
       - **Include selected child folders** (recommended): tick your own folder, for example **Wenjie**, and then **and its subfolders** to include everything filed below it.
       
       The child folders appear automatically. The blue **Scanning:** line shows exactly what will be read, for example *Inbox (this folder only) + Inbox/Wenjie and all its subfolders*.
+
+      For shared mailboxes, the app also recovers child folders that classic Outlook does not expose through the ordinary folder collection, using the mailbox hierarchy. If a folder is visible in Outlook but cannot be opened, it is reported as a folder warning/error rather than silently treated as empty.
       
       The completion folder (step 3 below) is never scanned. Emails that colleagues later move to other subfolders, such as *Completed*, are still found by **Open Outlook Reply** and **Mark Done**, but they don't create new tickets.
    4. Choose **Scan**:

@@ -782,6 +782,340 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(self.run_op("validate_folder", {"store_id": "S1", "entry_id": "NOPE"})["error_code"], "FOLDER_NOT_FOUND")
 
 
+# ----------------------------------------------------------------- shared-mailbox child folder discovery (MAPI)
+#
+# Reproduces what was observed live on the team (delegate) mailbox: Outlook's Folders collection of the
+# Inbox is EMPTY although the Inbox has subfolders; the hierarchy table opened with the entry ID that the
+# parent's (root's) hierarchy table hands out lists them. Opening the Inbox by the object model's
+# EntryID gives an empty hierarchy table too.
+
+class FakeTags:
+    PT_ERROR = 0x000A
+    PR_DISPLAY_NAME_W = 0x3001001F
+    PR_ENTRYID = 0x0FFF0102
+
+    @staticmethod
+    def PROP_TYPE(tag):
+        return tag & 0xFFFF
+
+    @staticmethod
+    def PROP_ID(tag):
+        return tag >> 16
+
+
+class FakeHierTable:
+    def __init__(self, rows):
+        self._rows = rows
+        self._cols = ()
+        self._done = False
+
+    def SetColumns(self, cols, flags):
+        self._cols = cols
+
+    def QueryRows(self, n, flags):
+        if self._done:
+            return []
+        self._done = True
+        out = []
+        for r in self._rows:
+            row = []
+            for tag in self._cols:
+                pid = tag >> 16
+                if pid in r:
+                    row.append((tag, r[pid]))
+                else:
+                    row.append(((pid << 16) | FakeTags.PT_ERROR, -2147221233))  # MAPI_E_NOT_FOUND
+            out.append(tuple(row))
+        return out
+
+
+class FakeMapiFolder:
+    def __init__(self, world, eid):
+        self.world, self.eid = world, eid
+
+    def GetHierarchyTable(self, flags):
+        self.world.tables_opened.append(self.eid)
+        return FakeHierTable(self.world.tables.get(self.eid, []))
+
+    def GetProps(self, tags, flags):
+        return 0, ((FakeTags.PR_ENTRYID, self.world.long_term[self.eid]),)
+
+
+class FakeMsgStore:
+    def __init__(self, world):
+        self.world = world
+
+    def OpenEntry(self, eid, iid, flags):
+        assert flags == 0, "folders must be opened read-only"
+        if eid not in self.world.long_term and eid not in self.world.tables:
+            raise FakeComError(0x8004010F - 2**32)  # MAPI_E_NOT_FOUND
+        return FakeMapiFolder(self.world, eid)
+
+
+class FakeSession:
+    def __init__(self, world):
+        self.world = world
+
+    def OpenMsgStore(self, ui, store_eid, iid, flags):
+        self.world.stores_opened.append(store_eid)
+        return FakeMsgStore(self.world)
+
+
+class FakeMapiObject:
+    def __init__(self, world):
+        self.world = world
+
+    def QueryInterface(self, iid):
+        return FakeSession(self.world)
+
+
+class HiddenChildrenFolder(FakeFolder):
+    """Outlook's view of the delegate Inbox: the Folders collection is empty."""
+
+    @property
+    def Folders(self):
+        return FakeCollection([])
+
+
+class BrokenFolders(FakeFolder):
+    @property
+    def Folders(self):
+        raise FakeComError(0x80040115 - 2**32)  # MAPI_E_NETWORK_ERROR
+
+
+def install_fake_mapi(world, fail_init=False):
+    mapi = types.ModuleType("win32com.mapi.mapi")
+    calls = {"init": 0, "uninit": 0}
+
+    def init(_):
+        if fail_init:
+            raise ImportError("no MAPI")
+        calls["init"] += 1
+    mapi.MAPIInitialize = init
+    mapi.MAPIUninitialize = lambda: calls.__setitem__("uninit", calls["uninit"] + 1)
+    mapi.IID_IMAPISession = "IID_IMAPISession"
+    mapi.MDB_NO_DIALOG = 1
+    mapi.MAPI_BEST_ACCESS = 0x10
+    pkg = types.ModuleType("win32com.mapi")
+    pkg.mapi = mapi
+    pkg.mapitags = FakeTags
+    sys.modules["win32com"].mapi = pkg
+    sys.modules["win32com.mapi"] = pkg
+    sys.modules["win32com.mapi.mapi"] = mapi
+    sys.modules["win32com.mapi.mapitags"] = FakeTags
+    return calls
+
+
+def build_shared_world():
+    """Team mailbox whose Inbox hides its subfolders from the object model."""
+    nsobj = FakeNamespaceObj()
+    root = FakeFolder("Team Mailbox", "A0", parent=nsobj, store_id="5A")
+    inbox = HiddenChildrenFolder("Inbox", "A1", parent=root, store_id="5A")
+    wen = FakeFolder("Wenjie", "A2", parent=inbox, store_id="5A",
+                     items=[FakeMail("W1", "Needs training", "x", conv="CW", imid="<w1@x>")])
+    sub = FakeFolder("School Subtype Needed", "A3", parent=wen, store_id="5A",
+                     items=[FakeMail("S1", "Subtype", "x", conv="CS", imid="<s1@x>")])
+    nj = FakeFolder("NJIIS Team", "A4", parent=inbox, store_id="5A",
+                    items=[FakeMail("N1", "Access problem", "x", conv="CN", imid="<n1@x>")])
+    njdone = FakeFolder("Completed", "A5", parent=nj, store_id="5A",
+                        items=[FakeMail("D1", "Done", "x", conv="CD", imid="<d1@x>")])
+    cal = FakeFolder("Calendar", "A7", parent=None, store_id="5A")
+    cal.Parent = inbox
+    cal.DefaultItemType = 1
+    inbox._children = []  # the object model shows nothing below the Inbox
+    store = FakeStore("Team Mailbox", "5A", root)
+    personal_root = FakeFolder("me@example.org", "C0", parent=nsobj, store_id="6B")
+    personal = FakeStore("me@example.org", "6B", personal_root)
+    ns = FakeNS([personal, store], {"A0": root, "A1": inbox, "A2": wen, "A3": sub, "A4": nj, "A5": njdone, "A7": cal}, {})
+
+    class World:
+        pass
+    world = World()
+    world.tables_opened, world.stores_opened = [], []
+    E = bytes.fromhex
+    pid = FakeTags.PROP_ID
+    hidden = 0x10F4
+    def row(name, eid, extra=None):
+        return {pid(FakeTags.PR_DISPLAY_NAME_W): name, pid(FakeTags.PR_ENTRYID): eid, **(extra or {})}
+    world.tables = {
+        E("A0"): [row("Inbox", E("EF01"))],                                   # store root (opened by its own ID)
+        E("A1"): [],                                                          # Inbox opened by the OOM EntryID: empty
+        E("EF01"): [row("Wenjie", E("EF02")), row("NJIIS Team", E("EF04")), row("Private", E("EF06")),
+                    row("Calendar", E("EF07")), row("Search Root", E("EF08"), {hidden: True})],
+        E("EF02"): [row("School Subtype Needed", E("EF03"))],
+        E("EF04"): [row("Completed", E("EF05"))],
+    }
+    world.long_term = {E("EF01"): E("B1"), E("EF02"): E("A2"), E("EF03"): E("A3"), E("EF04"): E("A4"),
+                       E("EF05"): E("A5"), E("EF06"): E("A6"), E("EF07"): E("A7"), E("EF08"): E("A8")}
+    ns.MAPIOBJECT = FakeMapiObject(world)
+    ns.DefaultStore = personal
+    return FakeApp(ns), world
+
+
+class SharedMailboxDiscoveryTests(unittest.TestCase):
+    def setUp(self):
+        self._saved = {k: sys.modules.get(k) for k in ("pythoncom", "win32com", "win32com.client", "win32com.mapi",
+                                                       "win32com.mapi.mapi", "win32com.mapi.mapitags")}
+        self.app, self.world = build_shared_world()
+        self.calls = install_fake_com(self.app)
+        self.mapi_calls = install_fake_mapi(self.world)
+
+    def tearDown(self):
+        for k, v in self._saved.items():
+            if v is None:
+                sys.modules.pop(k, None)
+            else:
+                sys.modules[k] = v
+
+    def run_op(self, op, params=None):
+        return w.handle({"op": op, "params": params or {}})
+
+    @staticmethod
+    def names(node):
+        return [c["name"] for c in node["children"]]
+
+    def test_outlook_really_hides_the_inbox_children(self):
+        self.assertEqual(self.app.ns.GetFolderFromID("A1").Folders.Count, 0, "precondition of the regression")
+
+    def test_mailbox_tree_shows_inbox_children_recovered_from_mapi(self):
+        r = self.run_op("list_folders", {"store_id": "5A"})
+        self.assertTrue(r["ok"], r)
+        root = r["data"]["root"]
+        inbox = root["children"][0]
+        self.assertEqual(inbox["path"], "Inbox")
+        self.assertEqual(self.names(inbox), ["Wenjie", "NJIIS Team", "Private"], "Calendar (not mail) and hidden folders are left out")
+        self.assertEqual(inbox["child_count"], 3)
+        self.assertTrue(inbox["has_children"])
+        wen = inbox["children"][0]
+        self.assertEqual((wen["path"], wen["entry_id"], wen["store_id"], wen["parent_entry_id"]), ("Inbox/Wenjie", "A2", "5A", "A1"))
+        self.assertEqual(self.names(wen), ["School Subtype Needed"], "nested level")
+        self.assertEqual(wen["children"][0]["path"], "Inbox/Wenjie/School Subtype Needed")
+        self.assertEqual(self.names(inbox["children"][1]), ["Completed"])
+        private = inbox["children"][2]
+        self.assertFalse(private["accessible"])
+        self.assertTrue(private["error"])
+        self.assertEqual(private["entry_id"], "", "no fake identifier for a folder that cannot be opened")
+        d = r["data"]["discovery"]
+        self.assertEqual(d["hierarchy_source"], "outlook+mapi")
+        self.assertIn("Inbox", d["repaired"])
+        self.assertEqual((d["descendants"], d["problems"]), (6, 1))
+        self.assertTrue(any("Inbox/Private" in e for e in d["errors"]), d["errors"])
+        self.assertTrue(any("'Inbox': 3 child folder(s)" in line for line in d["log"]), d["log"])
+        self.assertEqual(r["data"]["mailbox"], "Team Mailbox")
+        self.assertEqual((self.mapi_calls["init"], self.mapi_calls["uninit"]), (1, 1), "MAPI released with the session")
+        self.assertEqual(self.calls["uninit"], 1)
+
+    def test_subtree_of_the_inbox_by_entry_id(self):
+        r = self.run_op("list_folders", {"store_id": "5A", "root_entry_id": "A1"})
+        self.assertTrue(r["ok"], r)
+        root = r["data"]["root"]
+        self.assertEqual(root["path"], "Inbox")
+        self.assertEqual(self.names(root), ["Wenjie", "NJIIS Team", "Private"])
+        self.assertEqual(r["data"]["discovery"]["immediate_children"], 3)
+        self.assertIn(bytes.fromhex("EF01"), self.world.tables_opened, "the Inbox table was opened with the parent's row entry ID")
+
+    def test_subtree_of_a_nested_folder(self):
+        r = self.run_op("list_folders", {"store_id": "5A", "root_entry_id": "A2"})
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(r["data"]["root"]["path"], "Inbox/Wenjie")
+        self.assertEqual(self.names(r["data"]["root"]), ["School Subtype Needed"])
+
+    def test_shared_mailbox_by_name_uses_the_mounted_store_not_the_personal_inbox(self):
+        r = self.run_op("list_folders", {"shared_mailbox": "team mailbox"})
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(r["data"]["store_id"], "5A")
+        self.assertEqual(self.names(r["data"]["root"]["children"][0]), ["Wenjie", "NJIIS Team", "Private"])
+
+    def test_name_resolving_to_the_personal_mailbox_is_refused(self):
+        personal_inbox = FakeFolder("Inbox", "C1", parent=self.app.ns.DefaultStore.GetRootFolder(), store_id="6B")
+
+        class Rec:
+            def Resolve(self):
+                return True
+        self.app.ns.CreateRecipient = lambda name: Rec()
+        self.app.ns.GetSharedDefaultFolder = lambda rec, kind: personal_inbox
+        r = self.run_op("list_folders", {"shared_mailbox": "Some Other Box"})
+        self.assertFalse(r["ok"])
+        self.assertEqual(r["error_code"], "MAILBOX_IS_PERSONAL")
+
+    def test_sync_all_child_folders_reads_hidden_children_and_honours_exclusions(self):
+        req = {"key": "5A|A1", "store_id": "5A", "entry_id": "A1", "path": "Inbox", "since_utc": "2026-11-01T00:00:00Z",
+               "include_subfolders": True, "exclude_entry_ids": ["A5"]}
+        r = self.run_op("sync_messages", {"folders": [req]})
+        self.assertTrue(r["ok"], r)
+        res = r["data"]["folders"][0]
+        self.assertEqual(sorted(m["entry_id"] for m in res["messages"]), ["N1", "S1", "W1"], "excluded NJIIS Team/Completed not scanned")
+        self.assertEqual(res["folders_scanned"], 4)
+        self.assertFalse(res.get("incomplete", False), "an unopenable folder is a warning, not an incomplete scan")
+        self.assertTrue(any("Private" in x for x in res["folder_warnings"]))
+        s1 = next(m for m in res["messages"] if m["entry_id"] == "S1")
+        self.assertEqual(s1["folder_ancestors"], ["A2", "A1", "A0"])
+        self.assertEqual(r["data"]["stats"]["hierarchy_source"], "outlook+mapi")
+        # this folder only: no subfolder is read
+        r = self.run_op("sync_messages", {"folders": [dict(req, include_subfolders=False)]})
+        self.assertEqual(r["data"]["folders"][0]["messages"], [])
+
+    def test_scope_inventory_and_item_search_descend_into_hidden_children(self):
+        r = self.run_op("scope_inventory", {"scope_key": "k", "folders": [{"store_id": "5A", "entry_id": "A1", "include_subfolders": True, "path": "Inbox"}], "exclude": []})
+        self.assertTrue(r["ok"], r)
+        paths = [f["path"] for f in r["data"]["folders"]]
+        self.assertIn("Inbox/Wenjie/School Subtype Needed", paths)
+        self.assertFalse(r["data"]["complete"], "the unopenable folder makes the inventory incomplete (no false 'left scope')")
+        r = self.run_op("open_reply", {"entry_id": "OLD", "imid": "<s1@x>", "folders": [{"store_id": "5A", "entry_id": "A1", "recursive": True}]})
+        self.assertTrue(r["ok"], r)
+        self.assertTrue(r["data"]["relocated"])
+
+    def test_mapi_unavailable_falls_back_to_outlook_and_says_so(self):
+        install_fake_mapi(self.world, fail_init=True)
+        r = self.run_op("list_folders", {"store_id": "5A"})
+        self.assertTrue(r["ok"], r)
+        d = r["data"]["discovery"]
+        self.assertEqual(d["hierarchy_source"], "outlook")
+        self.assertTrue(d["mapi_error"])
+        self.assertTrue(any("Extended MAPI unavailable" in line for line in d["log"]))
+
+    def test_unreadable_subfolders_are_an_error_not_an_empty_folder(self):
+        install_fake_mapi(self.world, fail_init=True)
+        root = self.app.ns.GetFolderFromID("A0")
+        broken = BrokenFolders("Broken", "A9", parent=root, store_id="5A")
+        self.app.ns._folders["A9"] = broken
+        r = self.run_op("list_folders", {"store_id": "5A", "root_entry_id": "A9"})
+        self.assertTrue(r["ok"], r)
+        node = r["data"]["root"]
+        self.assertEqual(node["error"], "Subfolders could not be read")
+        self.assertFalse(node["children_loaded"])
+        self.assertTrue(any("0x80040115" in e for e in r["data"]["discovery"]["errors"]))
+        req = {"key": "k", "store_id": "5A", "entry_id": "A9", "path": "Broken", "since_utc": "2026-11-01T00:00:00Z", "include_subfolders": True}
+        res = self.run_op("sync_messages", {"folders": [req]})["data"]["folders"][0]
+        self.assertTrue(res["incomplete"], "a subtree that could not be listed is reported, never silently skipped")
+
+    def test_object_model_failure_alone_is_covered_by_mapi(self):
+        # Outlook raises for the root's Folders, MAPI still lists it
+        root = self.app.ns.GetFolderFromID("A0")
+        broken_root = BrokenFolders("Team Mailbox", "A0", parent=root.Parent, store_id="5A")
+        broken_root._children = root._children
+        self.app.ns.Stores.Item(2)._root = broken_root
+        self.app.ns._folders["A1"].Parent = broken_root
+        orig = self.app.ns.GetFolderFromID
+
+        def get(eid, sid=None):
+            return self.app.ns._folders["A1"] if eid == "B1" else orig(eid, sid)
+        self.app.ns.GetFolderFromID = get
+        r = self.run_op("list_folders", {"store_id": "5A"})
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(self.names(r["data"]["root"]), ["Inbox"])
+        self.assertEqual(self.names(r["data"]["root"]["children"][0]), ["Wenjie", "NJIIS Team", "Private"])
+
+    def test_discovery_never_writes(self):
+        self.run_op("list_folders", {"store_id": "5A"})
+        req = {"key": "k", "store_id": "5A", "entry_id": "A1", "path": "Inbox", "since_utc": "2026-11-01T00:00:00Z", "include_subfolders": True}
+        r = self.run_op("sync_messages", {"folders": [req]})
+        for f in ("A2", "A3", "A4"):
+            for m in self.app.ns._folders[f].Items._items:
+                self.assertEqual(m._writes, [], f"no property of {m.EntryID} was changed (read state, flags)")
+        self.assertTrue(r["ok"])
+
+
 class ProcessTests(unittest.TestCase):
     """Runs the real script as a subprocess (stdin/stdout JSON contract)."""
 
