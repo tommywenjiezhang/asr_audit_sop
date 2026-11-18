@@ -1,16 +1,23 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { api, debounce, errMsg, fmtDate, HISTORY_REASONS, localDayStart, reasonLabel, statusBadge, statusText, SYNC_LABEL, type ListQuery, type ScopeStatus, type Staff, type TicketSummary } from "../lib/api";
+  import { api, debounce, errMsg, fmtDate, HISTORY_REASONS, localDayStart, outlookPendingLabel, reasonLabel, statusBadge, statusText, SYNC_LABEL, type ListQuery, type ScopeStatus, type Staff, type TicketSummary } from "../lib/api";
   import { app, issueName, sharedLabel, toast } from "../lib/stores.svelte";
   import TicketDetail from "../components/TicketDetail.svelte";
   import NewTicketDialog from "../components/NewTicketDialog.svelte";
   import AssignDialog from "../components/AssignDialog.svelte";
+  import BulkBar from "../components/BulkBar.svelte";
+
+  let { openId = null }: { openId?: number | null } = $props();
 
   /** team views use the shared case records (any folder); the folder views use this computer's Outlook scope */
   type View = "team" | "mine" | "unassigned" | "current" | "unverified" | "history";
   const PAGE = 100;
-  const blank = { search: "", status: "", assignee: "", issue: "", recFrom: "", recTo: "", compFrom: "", compTo: "", asgFrom: "", asgTo: "", age: 0, reason: "", school: "", sender: "", sort: "received", sync: "" };
-  let view = $state<View>("team");
+  const blank = { search: "", status: "", assignee: "", issue: "", recFrom: "", recTo: "", compFrom: "", compTo: "", asgFrom: "", asgTo: "", age: 0, reason: "", school: "", sender: "", sort: "received", sync: "", outlook: false };
+  const VIEWS = ["team", "mine", "unassigned", "current", "unverified", "history"];
+  const stored = (() => { try { return localStorage.getItem("ticketsView") ?? ""; } catch { return ""; } })();
+  let view = $state<View>((VIEWS.includes(stored) ? stored : "team") as View);
+  $effect(() => { try { localStorage.setItem("ticketsView", view); } catch { /* storage unavailable */ } });
+  $effect(() => { if (openId != null) selected = openId; });
   let f = $state({ ...blank });
   let rows = $state<TicketSummary[]>([]);
   let total = $state(0);
@@ -43,6 +50,7 @@
       received_from: f.recFrom ? localDayStart(f.recFrom) : "", received_to: f.recTo ? localDayStart(f.recTo, 1) : "",
       completed_from: f.compFrom ? localDayStart(f.compFrom) : "", completed_to: f.compTo ? localDayStart(f.compTo, 1) : "",
       assigned_from: f.asgFrom ? localDayStart(f.asgFrom) : "", assigned_to: f.asgTo ? localDayStart(f.asgTo, 1) : "",
+      outlook: f.outlook ? "pending" : "",
     };
   }
 
@@ -64,7 +72,7 @@
 
   $effect(() => {
     void view; void f.status; void f.assignee; void f.issue; void f.recFrom; void f.recTo; void f.compFrom; void f.compTo;
-    void f.asgFrom; void f.asgTo; void f.age; void f.reason; void f.sort; void f.sync; void app.ticketsVersion; void app.sync?.running;
+    void f.asgFrom; void f.asgTo; void f.age; void f.reason; void f.sort; void f.sync; void f.outlook; void app.ticketsVersion; void app.sync?.running; void app.shared?.last_success_at;
     load();
   });
 
@@ -97,7 +105,7 @@
     selected = id;
   }
 
-  const views: [View, string][] = [["team", "Team Tickets"], ["mine", "My Tickets"], ["unassigned", "Unassigned"], ["current", "Current Tickets"], ["unverified", "Awaiting Location Check"], ["history", "Ticket History"]];
+  const views: [View, string][] = [["team", "Team Tickets"], ["mine", "My Tickets"], ["unassigned", "Unassigned"], ["current", "Inbox (current folders)"], ["unverified", "Awaiting Location Check"], ["history", "Ticket History"]];
   const countOf = (v: View) => (scope ? (v === "current" ? scope.current : v === "history" ? scope.history : v === "unverified" ? scope.unverified : -1) : 0);
   const sharedTag = $derived(sharedLabel(app.shared));
 </script>
@@ -152,6 +160,7 @@
           <option value="">Any sync state</option><option value="attention">Needs attention (pending, conflict, failed)</option>
           <option value="pending">Pending sync</option><option value="conflict">Conflict — review required</option><option value="failed">Failed — retry available</option>
         </select>
+        <label class="row small" style="gap:4px"><input type="checkbox" bind:checked={f.outlook} />Only cases with unfinished Outlook work (moves, archiving, handoff)</label>
         <select bind:value={f.issue} title="Issue type">
           <option value="">All issue types</option>
           {#each app.catalog?.issue_types ?? [] as it}<option value={it.id}>{it.name}</option>{/each}
@@ -179,18 +188,18 @@
           <span class="grow"></span>
           <span class="muted">Sort</span>
           <select style="width:auto" bind:value={f.sort}>
-            <option value="received">Received</option><option value="updated">Updated</option><option value="assigned">Assigned</option><option value="completed">Completed</option>
+            <option value="received">Newest received</option><option value="oldest">Oldest received</option><option value="activity">Latest activity</option><option value="updated">Updated</option><option value="assigned">Assigned</option><option value="completed">Completed</option>
           </select>
         </div>
       {/if}
       <div class="row small">
         <span class="muted"><b>{total}</b> {view === "current" ? "current" : view === "history" ? "historical" : view === "unverified" ? "unverified" : view === "mine" ? "open (mine)" : view === "unassigned" ? "unassigned" : "team"} case{total === 1 ? "" : "s"}{loading ? " · loading…" : ""}</span>
         <span class="grow"></span>
-        {#if checked.length && !(app.shared?.mode === "shared" && app.shared?.bound_database_id)}
-          <button class="small primary" onclick={() => (assignIds = [...checked])}>Assign selected ({checked.length})</button>
-          <button class="link small" onclick={() => (checked = [])}>Clear</button>
-        {/if}
+        {#if rows.length}<button class="link small" onclick={() => (checked = checked.length === rows.length ? [] : rows.map((r) => r.id))}>{checked.length === rows.length ? "Select none" : "Select all shown"}</button>{/if}
       </div>
+      {#if checked.length}
+        <BulkBar ids={checked} onclear={() => (checked = [])} onassign={(ids) => (assignIds = [...ids])} onchanged={() => load()} />
+      {/if}
     </div>
     <div class="list scroll">
       {#each rows as t (t.id)}
@@ -208,6 +217,7 @@
               {#if t.sync_state === "pending"}<span class="badge grey" title={SYNC_LABEL.pending}>⟳ pending</span>
               {:else if t.sync_state === "conflict"}<span class="badge err" title={SYNC_LABEL.conflict}>conflict</span>
               {:else if t.sync_state === "failed"}<span class="badge err" title={SYNC_LABEL.failed}>sync failed</span>{/if}
+              {#if t.outlook_pending}<span class="badge {t.outlook_pending.includes('failed') || t.outlook_pending.includes('uncertain') ? 'err' : 'warn'}" title={outlookPendingLabel(t.outlook_pending)}>Outlook</span>{/if}
               <span class="grow"></span>
               <span class="muted small">{fmtDate(t.first_received_at)}</span>
             </div>
@@ -216,7 +226,7 @@
             <div class="muted small ellipsis">{t.original_subject ?? ""}</div>
             {#if view === "history" && t.scope_reason}<div class="small reason">{reasonLabel(t.scope_reason)}</div>{/if}
             {#if t.status === "Review" && t.review_reason}<div class="small reason">Review: {t.review_reason}</div>{/if}
-            <div class="muted small">{t.ticket_ref ?? ""} · updated {fmtDate(t.updated_at)}</div>
+            <div class="muted small">{t.ticket_ref ?? ""} · activity {fmtDate(t.last_activity_at ?? t.updated_at)}</div>
           </button>
         </div>
       {:else}

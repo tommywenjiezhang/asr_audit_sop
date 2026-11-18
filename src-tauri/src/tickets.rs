@@ -204,6 +204,43 @@ pub struct TicketDetail {
     pub completions: Vec<CompletionDecision>,
     pub conflicts: Vec<crate::sync_queue::LocalConflict>,
     pub pending_ops: Vec<crate::sync_queue::OpRow>,
+    /// Outlook runs coordinated through the shared database (assignment moves / archiving), newest first
+    pub outlook_ops: Vec<OutlookOpRow>,
+    /// unfinished Outlook work summary (same as the list's indicator)
+    pub outlook_pending: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct OutlookOpRow {
+    pub outlook_op_id: String,
+    pub kind: String,
+    pub state: String,
+    pub active: bool,
+    pub notify_state: Option<String>,
+    pub device_name: Option<String>,
+    pub staff_name: Option<String>,
+    pub email_count: i64,
+    pub moved_count: i64,
+    pub last_error: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+    pub finished_at: Option<String>,
+}
+
+pub fn outlook_ops(conn: &Connection, id: i64) -> AppResult<Vec<OutlookOpRow>> {
+    let mut st = conn.prepare(
+        "SELECT outlook_op_id, kind, state, active, notify_state, device_name, staff_name, email_count, moved_count, last_error, created_at, updated_at, finished_at
+         FROM shared_outlook_ops WHERE ticket_id=?1 ORDER BY created_at DESC",
+    )?;
+    let v = st
+        .query_map([id], |r| {
+            Ok(OutlookOpRow {
+                outlook_op_id: r.get(0)?, kind: r.get(1)?, state: r.get(2)?, active: r.get::<_, i64>(3)? != 0, notify_state: r.get(4)?, device_name: r.get(5)?, staff_name: r.get(6)?,
+                email_count: r.get(7)?, moved_count: r.get(8)?, last_error: r.get(9)?, created_at: r.get(10)?, updated_at: r.get(11)?, finished_at: r.get(12)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(v)
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1166,6 +1203,8 @@ pub fn detail(conn: &Connection, id: i64) -> AppResult<TicketDetail> {
         completions: completion_decisions(conn, id)?,
         conflicts: crate::sync_queue::conflicts(conn, Some(id), false)?,
         pending_ops: crate::sync_queue::ticket_ops(conn, id)?,
+        outlook_ops: outlook_ops(conn, id)?,
+        outlook_pending: conn.query_row(&format!("SELECT ({OUTLOOK_PENDING_SQL}) FROM tickets t WHERE t.id=?1"), [id], |r| r.get(0))?,
     })
 }
 

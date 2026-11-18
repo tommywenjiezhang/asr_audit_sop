@@ -111,6 +111,15 @@ as the ${initEnv.toUpperCase()} ASR shared database "${initName}"? A verified ba
     if (r) { toast(`Initialized "${r.identity.display_name}" (${r.tables_created.length} tables). Backup: ${r.backup_path}`, "ok"); await test(); }
   }
 
+  async function upgrade() {
+    if (!st) return;
+    if (!confirm(`Upgrade the shared database at
+${st.path}
+to schema v${st.app_schema_version}? A verified backup copy is written next to it first. It is refused while another computer has it open.`)) return;
+    const r = await step("upgrade", () => api.sharedUpgrade());
+    if (r) { toast(`Upgraded from v${r.from_version} to v${r.to_version}; added ${r.tables_added.join(", ") || "nothing"}. Backup: ${r.backup_path}`, "ok"); await test(); }
+  }
+
   const yesno = (v?: boolean | null) => (v == null ? "—" : v ? "Yes" : "No");
 </script>
 
@@ -159,6 +168,13 @@ as the ${initEnv.toUpperCase()} ASR shared database "${initName}"? A verified ba
         This file is an <b>empty</b> Access database. Initialize it as the shared database (administrator, once; a verified backup is made first):
         <div class="row" style="margin-top:4px"><input style="width:220px" bind:value={initName} /><select style="width:130px" bind:value={initEnv}><option value="production">production</option><option value="test">test</option></select>
           <button class="small primary" onclick={initExisting} disabled={!!busy || !initName.trim()}>{busy === "init" ? "Initializing…" : "Initialize this database"}</button></div>
+      </div>
+    {/if}
+    {#if st.compatibility === "upgrade_required"}
+      <div class="notice warn small" style="margin-top:6px">
+        The shared database uses an <b>older schema</b> (v{st.schema_version}); this app needs v{st.app_schema_version}. An administrator upgrades it once: everyone closes the app (or switches to Standalone), then
+        <button class="small primary" onclick={upgrade} disabled={!!busy}>{busy === "upgrade" ? "Upgrading…" : "Upgrade the shared database…"}</button>
+        — a byte-verified backup copy is written next to the file first; existing data is kept; only new tables are added.
       </div>
     {/if}
     {#if st.state === "identity_changed"}

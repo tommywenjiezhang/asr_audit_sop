@@ -17,6 +17,8 @@ export interface TicketSummary {
   scope_state: "current" | "history" | "unverified"; scope_reason?: string | null; ticket_ref?: string | null; in_scope_count?: number;
   /** shared-database state of this case */
   sync_state: SyncState; review_reason?: string | null; new_reply?: boolean;
+  /** unfinished Outlook work, e.g. "assign:failed", "archive:reserved:PC-B", "handoff:uncertain" */
+  outlook_pending?: string | null; last_activity_at?: string | null;
 }
 export type SyncState = "local" | "pending" | "synced" | "conflict" | "failed";
 export interface Ticket extends TicketSummary {
@@ -36,7 +38,7 @@ export interface ListQuery {
   view?: string; sync?: string; status?: string; assignee?: string; reason?: string; school?: string; sender?: string; min_age_days?: number;
   assigned_from?: string; assigned_to?: string;
   search?: string; issue_type?: string; received_from?: string; received_to?: string;
-  completed_from?: string; completed_to?: string; sort?: string; limit?: number; offset?: number;
+  completed_from?: string; completed_to?: string; sort?: string; limit?: number; offset?: number; outlook?: string;
 }
 export interface Staff {
   id: number; display_name: string; email: string; mailbox_name?: string | null; store_id: string; folder_entry_id: string;
@@ -93,6 +95,51 @@ export interface TicketDetail {
   ticket: Ticket; fields: TicketField[]; messages: MessageRow[]; history: HistoryRow[];
   issues: IssueRow[]; schools: number[]; completion: CompletionRow[]; assignments: AssignmentOp[];
   notes: Note[]; ownership: OwnershipRow[]; completions: CompletionDecision[]; conflicts: LocalConflict[]; pending_ops: OpRow[];
+  outlook_ops: OutlookOpRow[]; outlook_pending?: string | null;
+}
+export interface OutlookOpRow {
+  outlook_op_id: string; kind: "assign" | "archive"; state: string; active: boolean; notify_state?: string | null; device_name?: string | null; staff_name?: string | null;
+  email_count: number; moved_count: number; last_error?: string | null; created_at: string; updated_at: string; finished_at?: string | null;
+}
+export interface Suggestion {
+  ticket_id: number; display_id: string; ticket_ref?: string | null; status: string; owner?: string | null; subject?: string | null; school?: string | null;
+  received_at?: string | null; score: number; reasons: string[]; linked: boolean; relation_id?: string | null;
+}
+export interface LinkedCase {
+  relation_id: string; relation_type: string; status: string; ticket_id?: number | null; display_id?: string | null; ticket_ref?: string | null;
+  case_status?: string | null; subject?: string | null; evidence?: string | null;
+}
+export interface MergeSource { ticket_id: number; display_id: string; ticket_ref?: string | null; status: string; owner?: string | null; emails: number; notes: number; schools: string[]; issues: string[]; blocked?: string | null; warnings: string[] }
+export interface MergePreview {
+  target_id: number; target_display: string; target_ref?: string | null; target_status: string; target_owner?: string | null; sources: MergeSource[];
+  emails_after: number; notes_after: number; schools_after: string[]; issues_after: string[]; status_after: string; can_run: boolean;
+}
+export interface MergeResult { ticket_id: number; display_id: string; ok: boolean; message: string }
+export interface TimelineItem { at: string; kind: "email" | "note" | "owner" | "done" | "outlook" | "history"; actor?: string | null; title: string; detail?: string | null; ref_id?: string | null }
+export interface BulkResult { ticket_id: number; display_id: string; ok: boolean; outcome: "done" | "unchanged" | "failed"; message: string }
+export interface BulkOutcome { results: BulkResult[]; ok: number; failed: number }
+export interface StaffLoad {
+  staff_id?: number | null; name: string; active: boolean; assigned: number; in_progress: number; review: number; unresolved: number; older: number;
+  oldest_days?: number | null; done_7d: number; done_30d: number; outlook_pending: number; conflicts: number;
+}
+export interface AgingCase { ticket_id: number; display_id: string; ticket_ref?: string | null; status: string; owner?: string | null; school?: string | null; subject?: string | null; age_days: number; idle_days: number }
+export interface TeamOverview {
+  old_days: number; total_open: number; unassigned: number; review: number; older: number; stale: number; outlook_pending: number; sync_pending: number; sync_held: number;
+  conflicts_open: number; done_7d: number; rows: StaffLoad[]; oldest: AgingCase[]; shared_last_success_at?: string | null; notes: string[];
+}
+export interface ActivitySummary { actor: string; actions_7d: number; cases_7d: number; last_at?: string | null }
+export interface ActivityRow { at: string; actor: string; action: string; ticket_id: number; display_id: string; ticket_ref?: string | null; detail?: string | null }
+export interface IntegrityReport { database_id: string; display_name: string; environment: string; schema_version: number; missing_tables: string[]; counts: [string, number][]; checks: [string, number][]; ok: boolean }
+export interface UpgradeReport { from_version: number; to_version: number; backup_path: string; backup_sha256: string; tables_added: string[] }
+export interface ProfileInfo { name: string; test_mode: boolean; outlook: "live" | "mock"; data_dir: string; device_id: string }
+
+/** Plain-language label for the unfinished-Outlook-work indicator. */
+export function outlookPendingLabel(v?: string | null): string {
+  if (!v) return "";
+  const [kind, state, device] = v.split(":");
+  const what = kind === "assign" ? "Assignment moves" : kind === "archive" ? "Archiving" : kind === "handoff" ? "Handoff email" : kind;
+  const st: Record<string, string> = { reserved: "in progress", moving: "in progress", moved: "moved", failed: "failed — retry", sending: "sending", pending: "not sent yet", uncertain: "uncertain — check Sent Items" };
+  return `${what}: ${st[state] ?? state}${device ? ` (${device})` : ""}`;
 }
 export interface Note { note_id: string; author_name: string; body: string; created_at: string; updated_at: string; origin: string; sync_state: "" | "pending" | "conflict" }
 export interface OwnershipRow { staff_name?: string | null; started_at: string; ended_at?: string | null; started_by?: string | null; start_reason?: string | null; end_reason?: string | null; origin: string }
@@ -281,6 +328,26 @@ export const api = {
   diagOverview: () => invoke<DiagOverview>("diag_overview"),
   diagCopyText: (ids: number[] | null, minSeverity: string) => invoke<string>("diag_copy_text", { ids, minSeverity }),
   diagReport: (component: string, code: string, summary: string) => invoke<void>("diag_report", { component, code, summary }),
+
+  relatedSuggestions: (id: number) => invoke<Suggestion[]>("related_suggestions", { id }),
+  ticketLinks: (id: number) => invoke<LinkedCase[]>("ticket_links", { id }),
+  ticketLink: (id: number, target: string) => invoke<string>("ticket_link", { id, target }),
+  ticketLinkSet: (id: number, relationId: string, status: "linked" | "dismissed" | "removed") => invoke<void>("ticket_link_set", { id, relationId, status }),
+  emailMove: (id: number, messageId: number, target: string) => invoke<number>("email_move", { id, messageId, target }),
+  mergePreview: (sources: number[], target: number) => invoke<MergePreview>("merge_preview", { sources, target }),
+  mergeRun: (sources: number[], target: number) => invoke<MergeResult[]>("merge_run", { sources, target }),
+  timeline: (id: number) => invoke<TimelineItem[]>("ticket_timeline", { id }),
+  openMessage: (ticketId: number, messageId: number) => invoke<void>("outlook_open_message", { ticketId, messageId }),
+  bulk: (action: string, ids: number[], reason: string | null = null) => invoke<BulkOutcome>("tickets_bulk", { action, ids, reason }),
+  exportSelected: (path: string, ids: number[]) => invoke<number>("export_selected", { path, ids }),
+  teamOverview: (oldDays: number, staleDays: number) => invoke<TeamOverview>("team_overview", { oldDays, staleDays }),
+  staffActivity: (actorName: string | null, limit: number) => invoke<{ summary: ActivitySummary[]; rows: ActivityRow[] }>("staff_activity", { actorName, limit }),
+  diagExport: (path: string, minSeverity: string) => invoke<number>("diag_export", { path, minSeverity }),
+  diagTestOutlook: () => invoke<Record<string, unknown>>("diag_test_outlook"),
+  sharedIntegrity: () => invoke<IntegrityReport>("shared_integrity"),
+  sharedBackupNow: (destDir: string | null) => invoke<[string, string]>("shared_backup_now", { destDir }),
+  sharedUpgrade: () => invoke<UpgradeReport>("shared_upgrade"),
+  profileInfo: () => invoke<ProfileInfo>("profile_info"),
 };
 
 // ------------------------------------------------------------ helpers
