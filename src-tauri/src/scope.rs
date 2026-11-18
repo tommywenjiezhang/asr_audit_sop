@@ -26,7 +26,7 @@ pub struct ScopeCfg {
     pub key: String,
     /// (store_id, folder EntryID, include subfolders)
     pub folders: Vec<(String, String, bool)>,
-    /// excluded subtrees (the Mark Done completion folder)
+    /// excluded subtrees (the Mark Done completion folder and folders excluded in Settings)
     pub exclude: Vec<String>,
     pub archive: Option<String>,
 }
@@ -42,7 +42,7 @@ pub fn fnv64(s: &str) -> u64 {
 
 pub fn cfg(s: &Settings) -> ScopeCfg {
     let folders: Vec<(String, String, bool)> = s.monitored().into_iter().map(|(f, subs)| (f.store_id, f.entry_id, subs)).collect();
-    let exclude: Vec<String> = s.archive_folder.iter().map(|a| a.entry_id.clone()).collect();
+    let exclude: Vec<String> = s.excluded_ids();
     let mut sig = String::new();
     for (st, e, subs) in &folders {
         sig.push_str(&format!("{st}|{e}|{subs};"));

@@ -147,7 +147,7 @@ pub fn build_requests(conn: &Connection, s: &Settings, now: DateTime<Utc>) -> Ap
             include_subfolders: *subs,
             since_utc: since,
             unread_only: s.scan_mode == "unread",
-            exclude_entry_ids: s.archive_folder.iter().map(|a| a.entry_id.clone()).collect(),
+            exclude_entry_ids: s.excluded_ids(),
         });
     }
     Ok((reqs, fulls))
@@ -165,6 +165,14 @@ pub struct FolderResult {
     pub resolved_path: Option<String>,
     pub truncated: bool,
     pub messages: Vec<IncomingMessage>,
+    /// Some subfolders could not be listed or opened: the messages that were read are imported,
+    /// but the watermark does not advance, so nothing in the unread part is skipped later.
+    pub incomplete: bool,
+    pub folder_errors: Vec<String>,
+    /// Subfolders that exist but cannot be opened (e.g. no permission): shown, but they do not hold
+    /// back the watermark (a permanent condition would otherwise grow the scan window forever).
+    pub folder_warnings: Vec<String>,
+    pub folders_scanned: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -207,8 +215,18 @@ pub fn apply_results(conn: &Connection, settings: &Settings, fulls: &[bool], res
         if r.truncated {
             warnings.push(format!("{}: more messages than the per-sync limit; the rest will be imported on the next check.", f.path));
         }
+        for w in r.folder_warnings.iter().take(5) {
+            warnings.push(format!("{}: {w}", f.path));
+        }
         let rep = tickets::ingest(conn, &r.messages, settings)?;
-        record_state(conn, f, fulls.get(i).copied().unwrap_or(false) && !r.truncated, rep.max_received_at.as_deref(), rep.new_messages, None)?;
+        if r.incomplete {
+            let msg = format!("{}: some subfolders could not be read ({}); they will be retried on the next check.",
+                f.path, r.folder_errors.iter().take(3).cloned().collect::<Vec<_>>().join("; "));
+            record_state(conn, f, false, None, rep.new_messages, Some(&msg))?;
+            warnings.push(msg);
+        } else {
+            record_state(conn, f, fulls.get(i).copied().unwrap_or(false) && !r.truncated, rep.max_received_at.as_deref(), rep.new_messages, None)?;
+        }
         total.seen += rep.seen;
         total.new_messages += rep.new_messages;
         total.already_imported += rep.already_imported;
@@ -333,5 +351,39 @@ mod tests {
         let err = vec![FolderResult { key: folder_key(&f), ok: false, message: Some("Folder not found".into()), ..Default::default() }];
         let (_, warns, _) = apply_results(&c, &s, &[false], &err).unwrap();
         assert!(warns[0].contains("Folder not found"));
+    }
+
+    #[test]
+    fn excluded_folders_are_sent_with_every_request() {
+        let c = open_in_memory().unwrap();
+        let mut s = Settings::default();
+        s.folder = Some(FolderRef { store_id: "S".into(), entry_id: "INBOX".into(), path: "Inbox".into() });
+        s.subfolder_mode = "all".into();
+        s.excluded_folders = vec![FolderRef { store_id: "S".into(), entry_id: "NJ-DONE".into(), path: "Inbox/NJIIS Team/Completed".into() }];
+        s.archive_folder = Some(FolderRef { store_id: "S".into(), entry_id: "DONE".into(), path: "Inbox/Completed".into() });
+        let (r, _) = build_requests(&c, &s, Utc::now()).unwrap();
+        assert!(r[0].include_subfolders);
+        assert_eq!(r[0].exclude_entry_ids, vec!["DONE".to_string(), "NJ-DONE".to_string()]);
+    }
+
+    #[test]
+    fn incomplete_subfolder_listing_imports_but_keeps_the_watermark() {
+        let c = conn();
+        let mut s = Settings::default();
+        let f = FolderRef { store_id: "S1".into(), entry_id: "INBOX".into(), path: "Inbox".into() };
+        s.folder = Some(f.clone());
+        s.subfolder_mode = "all".into();
+        let res = vec![FolderResult {
+            key: folder_key(&f), ok: true, incomplete: true, folder_errors: vec!["subfolders of 'Inbox/Aaron' could not be read".into()],
+            messages: vec![msg(1, "C1", "Black screen", "webinar black screen", "a@b.org")], ..Default::default()
+        }];
+        let (rep, warns, _) = apply_results(&c, &s, &[true], &res).unwrap();
+        assert_eq!(rep.created_tickets, 1, "messages that were read are imported");
+        assert!(warns.iter().any(|w| w.contains("Inbox/Aaron")), "{warns:?}");
+        let (recv, full, err): (Option<String>, Option<String>, Option<String>) = c
+            .query_row("SELECT last_received_at, last_full_scan_at, last_error FROM sync_state", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap();
+        assert!(recv.is_none() && full.is_none(), "watermark and full-scan time unchanged");
+        assert!(err.unwrap().contains("could not be read"));
     }
 }

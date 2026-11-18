@@ -23,6 +23,9 @@ pub struct Settings {
     pub selected_subfolders: Vec<FolderRef>,
     /// EntryIDs of selected subfolders whose own child folders are scanned too ("selected" mode).
     pub selected_with_children: Vec<String>,
+    /// Folders (with their subtrees) never scanned even when a parent is scanned with its subfolders,
+    /// e.g. "Inbox/NJIIS Team/Completed". Absent in settings files written before 1.2.1 (= none).
+    pub excluded_folders: Vec<FolderRef>,
     pub sync_enabled: bool,
     pub interval_minutes: u32,
     pub check_on_startup: bool,
@@ -79,6 +82,7 @@ impl Default for Settings {
             subfolder_mode: "none".into(),
             selected_subfolders: vec![],
             selected_with_children: vec![],
+            excluded_folders: vec![],
             sync_enabled: false,
             interval_minutes: 5,
             check_on_startup: true,
@@ -106,6 +110,11 @@ impl Default for Settings {
             shared_sync_minutes: 2,
         }
     }
+}
+
+/// True if `path` lies strictly below `parent` ("Inbox/Wenjie/X" is below "Inbox/Wenjie"; "Inbox/Wenjie2" is not).
+pub fn is_below(path: &str, parent: &str) -> bool {
+    path.len() > parent.len() + 1 && path.starts_with(parent) && path.as_bytes()[parent.len()] == b'/'
 }
 
 pub const ALLOWED_INTERVALS: &[u32] = &[1, 5, 10, 15, 30];
@@ -165,6 +174,11 @@ impl Settings {
                 return Err(AppError::coded("INVALID", "The completion folder cannot be a monitored folder. Choose a different folder."));
             }
         }
+        if let Some(f) = &self.folder {
+            if self.excluded_folders.iter().any(|x| x.entry_id == f.entry_id) {
+                return Err(AppError::coded("INVALID", "The monitored folder itself cannot be excluded."));
+            }
+        }
         if self.prompt_instructions.len() > 20_000 {
             return Err(AppError::coded("INVALID", "Prompt instructions are too long"));
         }
@@ -191,12 +205,36 @@ impl Settings {
         }
     }
 
-    /// Drop "with children" marks for folders that are no longer selected.
+    /// Drop "with children" marks for folders that are no longer selected, selections that are already
+    /// covered by a selected parent scanned with its subfolders (no folder is scanned twice), duplicate
+    /// entries, and exclusions of the monitored folder itself.
     pub fn normalized(mut self) -> Settings {
+        let mut seen = std::collections::HashSet::new();
+        self.selected_subfolders.retain(|f| seen.insert(f.entry_id.clone()));
+        if let Some(main) = &self.folder {
+            let main_id = main.entry_id.clone();
+            self.selected_subfolders.retain(|f| f.entry_id != main_id);
+            self.excluded_folders.retain(|f| f.entry_id != main_id);
+        }
         let sel: Vec<String> = self.selected_subfolders.iter().map(|f| f.entry_id.clone()).collect();
         self.selected_with_children.retain(|id| sel.contains(id));
+        self.selected_with_children.sort();
         self.selected_with_children.dedup();
+        let covering: Vec<FolderRef> =
+            self.selected_subfolders.iter().filter(|f| self.selected_with_children.contains(&f.entry_id)).cloned().collect();
+        self.selected_subfolders.retain(|f| !covering.iter().any(|c| c.store_id == f.store_id && is_below(&f.path, &c.path)));
+        let mut seen_x = std::collections::HashSet::new();
+        self.excluded_folders.retain(|f| seen_x.insert(f.entry_id.clone()));
         self
+    }
+
+    /// EntryIDs whose subtrees are never scanned: explicit exclusions plus the Mark Done completion folder.
+    pub fn excluded_ids(&self) -> Vec<String> {
+        let mut v: Vec<String> = self.excluded_folders.iter().map(|f| f.entry_id.clone()).collect();
+        v.extend(self.archive_folder.iter().map(|a| a.entry_id.clone()));
+        v.sort();
+        v.dedup();
+        v
     }
 
     /// Plain-language description of what a scan reads.
@@ -209,7 +247,12 @@ impl Settings {
             .iter()
             .map(|(m, subs)| if *subs { format!("{} and all its subfolders", m.path) } else { format!("{} (this folder only)", m.path) })
             .collect();
-        parts.join(" + ")
+        let mut out = parts.join(" + ");
+        if !self.excluded_folders.is_empty() && self.monitored().iter().any(|(_, subs)| *subs) {
+            let x: Vec<&str> = self.excluded_folders.iter().map(|f| f.path.as_str()).collect();
+            out.push_str(&format!(", except {}", x.join(", ")));
+        }
+        out
     }
 
     pub fn save(&self, path: &Path) -> AppResult<()> {
@@ -318,5 +361,42 @@ mod tests {
         let p = dir.path().join("settings.json");
         std::fs::write(&p, r#"{"subfolder_mode":"selected"}"#).unwrap();
         assert!(Settings::load(&p).selected_with_children.is_empty());
+    }
+
+    #[test]
+    fn overlapping_selections_and_exclusions_are_normalized() {
+        let f = |id: &str, p: &str| FolderRef { store_id: "S".into(), entry_id: id.into(), path: p.into() };
+        let mut s = Settings::default();
+        s.folder = Some(f("INBOX", "Inbox"));
+        s.subfolder_mode = "selected".into();
+        s.selected_subfolders = vec![f("WEN", "Inbox/Wenjie"), f("NT", "Inbox/Wenjie/Needs Training"), f("WEN", "Inbox/Wenjie"),
+            f("WEN2", "Inbox/Wenjie2"), f("INBOX", "Inbox")];
+        s.selected_with_children = vec!["WEN".into(), "WEN".into()];
+        s.excluded_folders = vec![f("DONE", "Inbox/Wenjie/Completed"), f("DONE", "Inbox/Wenjie/Completed"), f("INBOX", "Inbox")];
+        let n = s.normalized();
+        let ids: Vec<&str> = n.selected_subfolders.iter().map(|x| x.entry_id.as_str()).collect();
+        assert_eq!(ids, vec!["WEN", "WEN2"], "covered child, duplicate and the main folder removed; sibling with a common prefix kept");
+        assert_eq!(n.selected_with_children, vec!["WEN".to_string()]);
+        assert_eq!(n.excluded_folders.len(), 1);
+        assert!(n.validate().is_ok());
+        let mut a = n.clone();
+        a.archive_folder = Some(f("ARCH", "Inbox/Archive"));
+        assert_eq!(a.excluded_ids(), vec!["ARCH".to_string(), "DONE".to_string()]);
+        assert!(a.scan_summary().ends_with(", except Inbox/Wenjie/Completed"), "{}", a.scan_summary());
+        let mut bad = n.clone();
+        bad.excluded_folders.push(f("INBOX", "Inbox"));
+        assert!(bad.validate().is_err(), "the monitored folder itself cannot be excluded");
+        assert!(is_below("Inbox/Wenjie/X", "Inbox/Wenjie") && !is_below("Inbox/Wenjie2", "Inbox/Wenjie") && !is_below("Inbox/Wenjie", "Inbox/Wenjie"));
+    }
+
+    #[test]
+    fn settings_written_before_exclusions_still_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("settings.json");
+        std::fs::write(&p, r#"{"subfolder_mode":"all","folder":{"store_id":"S","entry_id":"INBOX","path":"Inbox"},"shared_sync_minutes":2}"#).unwrap();
+        let s = Settings::load(&p);
+        assert_eq!(s.subfolder_mode, "all");
+        assert!(s.excluded_folders.is_empty());
+        assert_eq!(s.folder.unwrap().entry_id, "INBOX");
     }
 }

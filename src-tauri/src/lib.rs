@@ -15,6 +15,7 @@ mod demo;
 pub mod drafts;
 pub mod error;
 pub mod export;
+pub mod folders;
 pub mod notes;
 pub mod outlook;
 pub mod outlook_mock;
