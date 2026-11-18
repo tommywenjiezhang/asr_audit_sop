@@ -1,9 +1,14 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
-  import { api, errMsg, fmtDate, type AppInfo, type FolderNode, type Settings, type Staff, type StaffInput } from "../lib/api";
+  import { api, copyText, errMsg, fmtDate, type AppInfo, type FolderNode, type Settings, type Staff, type StaffInput } from "../lib/api";
   import { app, toast } from "../lib/stores.svelte";
   import FolderTree from "../components/FolderTree.svelte";
+  import SubfolderPicker from "../components/SubfolderPicker.svelte";
+  import { descendants, discovery, discoveryReport, findNode, isBelow, loadFolders, ref, scanPlan } from "../lib/folders.svelte";
+  import SharedDatabasePanel from "../components/SharedDatabasePanel.svelte";
+
+  let { onopendiagnostics }: { onopendiagnostics?: () => void } = $props();
 
   let s = $state<Settings | null>(null);
   let info = $state<AppInfo | null>(null);
@@ -16,11 +21,20 @@
 
   /** subtree of the monitored folder only (fast), so child folders can be chosen without loading the whole mailbox */
   let sub = $state<FolderNode | null>(null);
+  /** errors are shown where they happened - a failed listing is never presented as "no child folders" */
+  let treeError = $state("");
+  let subError = $state("");
+  /** last mailbox listing request (for Refresh Folders) */
+  let treeReq = $state<{ storeId: string | null; shared: string | null } | null>(null);
+  /** expansion state by folder path: kept across Refresh Folders */
+  let expanded = $state<Record<string, boolean>>({});
+  let pickExpanded = $state<Record<string, boolean>>({});
 
   onMount(async () => {
     try {
       s = await api.settings();
       s.selected_with_children ??= [];
+      s.excluded_folders ??= [];
       internalText = s.internal_senders.join("\n");
       sharedName = s.mailbox_name;
       info = await api.appInfo();
@@ -28,11 +42,19 @@
     if (s?.folder) loadSubtree();
   });
 
-  async function loadSubtree() {
+  async function loadSubtree(refresh = false) {
     if (!s?.folder) return;
     const f = s.folder;
-    const r = await step("subtree", () => api.folders(f.store_id, null, f.entry_id));
-    if (r) sub = r.root;
+    busy = "subtree";
+    subError = "";
+    try {
+      const r = await loadFolders(f.store_id, null, f.entry_id, refresh);
+      if (s.folder?.entry_id === f.entry_id) sub = r.root;
+    } catch (e) {
+      subError = errMsg(e);
+    } finally {
+      busy = "";
+    }
   }
 
   async function step<T>(label: string, fn: () => Promise<T>): Promise<T | undefined> {
@@ -48,14 +70,32 @@
     const r = await step("mailboxes", () => api.mailboxes());
     if (r) mailboxes = r.mailboxes;
   }
-  async function loadTree(storeId: string | null, shared: string | null) {
-    const r = await step("folders", () => api.folders(storeId, shared));
-    if (r && s) { tree = r.root; s.mailbox_store_id = r.store_id; }
+  async function loadTree(storeId: string | null, shared: string | null, refresh = false, name: string | null = null) {
+    if (!s) return;
+    busy = "folders";
+    treeError = "";
+    try {
+      const r = await loadFolders(storeId, shared, null, refresh);
+      tree = r.root;
+      treeReq = { storeId, shared };
+      s.mailbox_store_id = r.store_id;
+      s.mailbox_name = name || r.mailbox || s.mailbox_name;
+    } catch (e) {
+      tree = null;
+      treeError = errMsg(e);
+    } finally {
+      busy = "";
+    }
   }
   function pickMailbox(m: { display_name: string; store_id: string }) {
     if (!s) return;
-    s.mailbox_name = m.display_name;
-    loadTree(m.store_id, null);
+    if (m.store_id !== s.mailbox_store_id) expanded = {};
+    loadTree(m.store_id, null, false, m.display_name);
+  }
+  /** Re-read the folder list from Outlook (finds new, renamed and removed folders); keeps expansion and selection. */
+  async function refreshFolders() {
+    if (treeReq) await loadTree(treeReq.storeId, treeReq.shared, true);
+    if (s?.folder) await loadSubtree(true);
   }
 
   function pickFolder(n: FolderNode) {
@@ -63,52 +103,58 @@
     s.folder = { store_id: n.store_id, entry_id: n.entry_id, path: n.path };
     s.selected_subfolders = [];
     s.selected_with_children = [];
+    s.excluded_folders = (s.excluded_folders ?? []).filter((x) => x.store_id === n.store_id && isBelow(x.path, n.path));
     sub = n;
+    subError = "";
+    if (n.children_loaded === false || n.error) loadSubtree(true);
   }
 
-  function findNode(n: FolderNode | null, id: string): FolderNode | null {
-    if (!n) return null;
-    if (n.entry_id === id) return n;
-    for (const c of n.children) { const f = findNode(c, id); if (f) return f; }
-    return null;
-  }
-  const selectedNode = $derived(s?.folder ? (findNode(tree, s.folder.entry_id) ?? (sub?.entry_id === s.folder.entry_id ? sub : null)) : null);
-  function flatten(n: FolderNode): FolderNode[] { return n.children.flatMap((c) => [c, ...flatten(c)]); }
-  function toggleSub(n: FolderNode, on: boolean) {
-    if (!s) return;
-    s.selected_subfolders = s.selected_subfolders.filter((f) => f.entry_id !== n.entry_id);
-    s.selected_with_children = s.selected_with_children.filter((id) => id !== n.entry_id);
-    if (on) s.selected_subfolders.push({ store_id: n.store_id, entry_id: n.entry_id, path: n.path });
-  }
-  function toggleChildren(n: FolderNode, on: boolean) {
-    if (!s) return;
-    s.selected_with_children = s.selected_with_children.filter((id) => id !== n.entry_id);
-    if (on) s.selected_with_children.push(n.entry_id);
-  }
-  const isSelected = (n: FolderNode) => !!s?.selected_subfolders.some((f) => f.entry_id === n.entry_id);
-  /** the selected folder (with "and its subfolders") that already covers this folder, if any */
-  function coveredBy(n: FolderNode): string | null {
-    if (!s) return null;
-    const anc = s.selected_subfolders.find((f) => s!.selected_with_children.includes(f.entry_id) && n.path.startsWith(f.path + "/"));
-    return anc ? anc.path : null;
-  }
-  const scanSummary = $derived.by(() => {
-    if (!s?.folder) return "nothing selected";
-    if (s.subfolder_mode === "all") return `${s.folder.path} and all its subfolders`;
-    const parts = [`${s.folder.path} (this folder only)`];
-    if (s.subfolder_mode === "selected") {
-      for (const f of s.selected_subfolders) parts.push(s.selected_with_children.includes(f.entry_id) ? `${f.path} and all its subfolders` : `${f.path} (this folder only)`);
-    }
-    return parts.join(" + ");
+  /** the monitored folder's node: from the mailbox tree, else from its own subtree listing */
+  const selectedNode = $derived.by(() => {
+    if (!s?.folder) return null;
+    const t = findNode(tree, s.folder.entry_id);
+    const own = sub?.entry_id === s.folder.entry_id ? sub : null;
+    return t && t.children_loaded !== false ? t : (own ?? t);
   });
+  const plan = $derived(s ? scanPlan(s, selectedNode) : []);
+  const scanSummary = $derived(plan.map((p) => `${p.path} (${p.note})`).join(" + ") || "nothing selected");
+
+  /** "selected" mode: every child folder with all of its subfolders */
+  function selectAll() {
+    if (!s || !selectedNode) return;
+    s.selected_subfolders = selectedNode.children.filter((c) => c.accessible !== false && c.entry_id).map(ref);
+    s.selected_with_children = s.selected_subfolders.filter((f) => findNode(selectedNode, f.entry_id)?.children.length).map((f) => f.entry_id);
+  }
+  function clearAll() {
+    if (!s) return;
+    s.selected_subfolders = [];
+    s.selected_with_children = [];
+  }
+  /** exclude every folder named "Completed" (or "... Completed ...") below the monitored folder */
+  function excludeCompleted() {
+    if (!s || !selectedNode) return;
+    const done = descendants(selectedNode).filter((n) => /complete/i.test(n.name) && n.entry_id);
+    const have = new Set((s.excluded_folders ?? []).map((x) => x.entry_id));
+    s.excluded_folders = [...(s.excluded_folders ?? []), ...done.filter((n) => !have.has(n.entry_id)).map(ref)];
+    toast(done.length ? `${done.length} folder(s) excluded: ${done.map((n) => n.path).join(", ")}` : "No folder named Completed below this folder.", "info");
+  }
+  async function copyDiagnostics() {
+    try {
+      await copyText(discoveryReport(s));
+      toast("Folder diagnostics copied — paste them into an email or Teams message to the developer", "ok");
+    } catch (e) {
+      toast(`Could not copy: ${errMsg(e)}`, "error");
+    }
+  }
 
   // ---- completion (archive) folder: separate picker so it can live in another (shared) mailbox
   let archTree = $state<FolderNode | null>(null);
   let archShared = $state("");
   let archCheck = $state<{ ok: boolean; text: string } | null>(null);
+  let archExpanded = $state<Record<string, boolean>>({});
   async function loadArchTree(storeId: string | null, shared: string | null, name: string) {
-    const r = await step("archfolders", () => api.folders(storeId, shared));
-    if (r && s) { archTree = r.root; s.archive_mailbox_name = name; }
+    const r = await step("archfolders", () => loadFolders(storeId, shared));
+    if (r && s) { archTree = r.root; s.archive_mailbox_name = r.mailbox || name; }
   }
   function pickArchive(n: FolderNode) {
     if (!s) return;
@@ -123,11 +169,12 @@
     if (r && s.archive_folder) s.archive_folder.path = r.path;
   }
   // ---- staff assignment (stored in SQLite, saved per person - not with "Save Settings")
-  const emptyStaff = (): StaffInput => ({ id: null, display_name: "", email: "", mailbox_name: "", store_id: "", folder_entry_id: "", folder_path: "" });
+  const emptyStaff = (): StaffInput => ({ id: null, display_name: "", email: "", mailbox_name: "", store_id: "", folder_entry_id: "", folder_path: "", windows_account: "" });
   let staffRows = $state<Staff[]>([]);
   let me = $state<number | null>(null);
   let editing = $state<StaffInput | null>(null);
   let staffTree = $state<FolderNode | null>(null);
+  let staffExpanded = $state<Record<string, boolean>>({});
   let staffMsg = $state<{ ok: boolean; text: string } | null>(null);
   let accounts = $state<{ display_name: string; smtp: string }[]>([]);
   const EMAIL_RE = /^[A-Za-z0-9._%+'-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}$/;
@@ -139,7 +186,7 @@
   async function staffFolders() {
     if (!s) return;
     const name = editing?.mailbox_name || s.mailbox_name;
-    const r = await step("stafffolders", () => (s!.mailbox_store_id ? api.folders(s!.mailbox_store_id, null) : api.folders(null, name)));
+    const r = await step("stafffolders", () => (s!.mailbox_store_id ? loadFolders(s!.mailbox_store_id, null) : loadFolders(null, name)));
     if (r) { staffTree = r.root; if (editing && !editing.mailbox_name) editing.mailbox_name = s.mailbox_name; }
   }
   function pickStaffFolder(n: FolderNode) {
@@ -149,7 +196,6 @@
   async function saveStaff() {
     if (!editing) return;
     if (!EMAIL_RE.test(editing.email.trim())) { staffMsg = { ok: false, text: "Enter a valid email address." }; return; }
-    if (!editing.folder_entry_id) { staffMsg = { ok: false, text: "Choose the staff member's Outlook folder." }; return; }
     const r = await step("staffsave", () => api.staffSave($state.snapshot(editing) as StaffInput));
     if (r) { staffMsg = { ok: true, text: `Saved ${r.display_name}.` }; editing = null; staffTree = null; await loadStaff(); }
   }
@@ -199,6 +245,8 @@
   <div class="scroll page">
     <div class="row"><h2 style="margin:0">Settings</h2><span class="grow"></span><button class="primary" disabled={!!busy} onclick={saveSettings}>Save Settings</button></div>
 
+    <SharedDatabasePanel {onopendiagnostics} />
+
     <section class="panel">
       <h3>Outlook Connection</h3>
       <p class="small muted">Uses your existing classic Outlook for Windows profile. No passwords are stored and no separate sign-in is needed.</p>
@@ -223,9 +271,19 @@
           {#each mailboxes as m}<button class="small" class:primary={m.store_id === s.mailbox_store_id} disabled={!!busy} onclick={() => pickMailbox(m)}>{m.display_name}</button>{/each}
         </div>
       {/if}
-      {#if busy === "folders"}<div class="muted small">Reading folder list…</div>{/if}
+      {#if busy === "folders"}<div class="muted small" role="status"><span class="spinner"></span> Reading the folder list from Outlook… (large shared mailboxes can take a few seconds)</div>{/if}
+      {#if treeError}
+        <div class="notice err small" style="margin-top:6px"><b>The folder list could not be read.</b> {treeError}
+          <button class="link small" onclick={() => treeReq ? loadTree(treeReq.storeId, treeReq.shared, true) : loadTree(null, sharedName, true)}>Retry</button>
+          <button class="link small" onclick={copyDiagnostics}>Copy Diagnostics</button></div>
+      {/if}
       {#if tree}
-        <div class="treebox panel"><FolderTree node={tree} selectedId={s.folder?.entry_id ?? ""} onselect={pickFolder} /></div>
+        <div class="row small" style="margin-top:6px">
+          <span class="muted">Mailbox: <b>{s.mailbox_name}</b>{#if discovery.last?.discovery} · {discovery.last.discovery.descendants} folders{/if}</span>
+          <span class="grow"></span>
+          <button class="small" onclick={refreshFolders} disabled={!!busy} title="Read the folder list from Outlook again (finds new, renamed and removed folders)">{busy === "folders" || busy === "subtree" ? "Refreshing…" : "⟳ Refresh Folders"}</button>
+        </div>
+        <div class="treebox panel" role="tree"><FolderTree node={tree} selectedId={s.folder?.entry_id ?? ""} onselect={pickFolder} {expanded} /></div>
       {/if}
       {#if s.folder}
         <div class="field" style="margin-top:8px"><div class="lbl">Child folders</div>
@@ -233,36 +291,65 @@
             <label class="inline"><input type="radio" bind:group={s.subfolder_mode} value="none" /> Monitor this folder only</label>
             <label class="inline"><input type="radio" bind:group={s.subfolder_mode} value="all" /> Include all child folders</label>
             <label class="inline"><input type="radio" bind:group={s.subfolder_mode} value="selected" /> Include selected child folders</label>
-            {#if s.subfolder_mode === "selected"}
-              {#if selectedNode}
-                {#each flatten(selectedNode) as c (c.entry_id)}
-                  {@const cov = coveredBy(c)}
-                  <div class="row small" style="margin-left:{22 + 14 * (c.path.split('/').length - selectedNode.path.split('/').length - 1)}px">
-                    {#if cov}
-                      <label class="inline muted"><input type="checkbox" checked disabled />{c.name} <span class="badge grey">included via {cov}</span></label>
-                    {:else}
-                      <label class="inline"><input type="checkbox" checked={isSelected(c)} onchange={(e) => toggleSub(c, (e.target as HTMLInputElement).checked)} />{c.name}</label>
-                      {#if isSelected(c) && c.children.length}
-                        <label class="inline muted"><input type="checkbox" checked={s.selected_with_children.includes(c.entry_id)} onchange={(e) => toggleChildren(c, (e.target as HTMLInputElement).checked)} />and its subfolders ({flatten(c).length})</label>
-                      {/if}
-                    {/if}
-                  </div>
-                {:else}
-                  <div class="small muted" style="margin-left:22px">This folder has no child folders.</div>
-                {/each}
-              {:else if busy === "subtree"}
-                <div class="small muted" style="margin-left:22px">Reading child folders…</div>
-              {:else}
-                <div class="small muted" style="margin-left:22px">
-                  Child folders could not be read. Selected: {s.selected_subfolders.map((f) => f.path).join(", ") || "none"}
-                  <button class="link small" onclick={loadSubtree}>Retry</button>
+            {#if s.subfolder_mode !== "none"}
+              {#if selectedNode && selectedNode.children.length}
+                <div class="row small wrap" style="margin-top:4px">
+                  {#if s.subfolder_mode === "selected"}
+                    <button class="small" onclick={selectAll}>Select All</button>
+                    <button class="small" onclick={clearAll}>Clear All</button>
+                  {/if}
+                  <button class="small" onclick={excludeCompleted} title="Exclude every folder named Completed below {selectedNode.path}">Exclude “Completed” folders</button>
+                  {#if s.excluded_folders?.length}<button class="small" onclick={() => (s!.excluded_folders = [])}>Clear exclusions</button>{/if}
+                  <span class="muted">
+                    {s.subfolder_mode === "all" ? "Every folder below is scanned. Untick a folder to exclude it with its subfolders." : "Tick the folders to scan. “+ subfolders” also scans everything below that folder; untick one of those to exclude it."}
+                  </span>
                 </div>
+                <div class="treebox panel pick" role="tree">
+                  <SubfolderPicker {s} root={selectedNode} node={selectedNode} expanded={pickExpanded} />
+                </div>
+              {:else if busy === "subtree"}
+                <div class="small muted" style="margin-left:22px" role="status"><span class="spinner"></span> Reading child folders of {s.folder.path}…</div>
+              {:else if subError}
+                <div class="notice err small" style="margin-left:22px">
+                  <b>Child folders of {s.folder.path} could not be read.</b> {subError}
+                  {#if subError.includes("not found")}The folder may have been renamed, moved or deleted, or your access was removed. Choose it again above.{/if}
+                  <button class="link small" onclick={() => loadSubtree(true)}>Retry</button>
+                  <button class="link small" onclick={copyDiagnostics}>Copy Diagnostics</button>
+                  {#if s.subfolder_mode === "selected"}<div>Saved selection: {s.selected_subfolders.map((f) => f.path).join(", ") || "none"}</div>{/if}
+                </div>
+              {:else if selectedNode?.error}
+                <div class="notice err small" style="margin-left:22px"><b>Child folders of {s.folder.path} could not be read</b> ({selectedNode.error_detail ?? selectedNode.error}).
+                  <button class="link small" onclick={() => loadSubtree(true)}>Retry</button> <button class="link small" onclick={copyDiagnostics}>Copy Diagnostics</button></div>
+              {:else if selectedNode && selectedNode.children_loaded !== false}
+                <div class="small muted" style="margin-left:22px">{s.folder.path} has no child folders in Outlook. <button class="link small" onclick={() => loadSubtree(true)}>Check again</button></div>
+              {:else}
+                <div class="small muted" style="margin-left:22px">Child folders not loaded yet. <button class="link small" onclick={() => loadSubtree(true)}>Load child folders</button></div>
               {/if}
             {/if}
           </div></div>
-        <div class="notice small" style="margin-top:6px"><b>Scanning:</b> {scanSummary}{#if s.archive_folder}. <b>Never scanned:</b> {s.archive_folder.path} (completion folder){/if}.
-          <div class="muted">Emails moved to other subfolders later are still found for Open Outlook Reply and Mark Done; they do not create new tickets.</div></div>
+        <div class="notice small" style="margin-top:6px">
+          <b>Scanning {plan.length} folder(s)</b> in <b>{s.mailbox_name}</b>{#if s.archive_folder}. <b>Never scanned:</b> {s.archive_folder.path} (completion folder){/if}{#if s.excluded_folders?.length}. <b>Excluded:</b> {s.excluded_folders.map((x) => x.path).join(", ")}{/if}.
+          <details><summary class="small">Show the exact list</summary>
+            <ul class="planlist">{#each plan as p}<li><code>{p.path}</code> <span class="muted">— {p.note}</span></li>{/each}</ul>
+          </details>
+          <div class="muted">Emails moved to other subfolders later are still found for Open Outlook Reply and Mark Done; they do not create new tickets. Tickets from folders that are no longer monitored stay available in ticket history.</div></div>
       {/if}
+      <details class="small" style="margin-top:6px">
+        <summary>Folder discovery details</summary>
+        {#if discovery.last?.discovery}
+          {@const d = discovery.last.discovery}
+          <div class="muted">Last read {new Date(discovery.last.at).toLocaleTimeString()} ({discovery.last.request}): mailbox “{discovery.last.mailbox}”, {d.immediate_children} immediate child folder(s), {d.descendants} folder(s) in total, {d.problems} with problems, {d.elapsed_ms} ms, source {d.hierarchy_source}.
+            {#if d.repaired.length}<br />Outlook reported too few subfolders for {d.repaired.join(", ")}; they were read from the mailbox's folder table instead.{/if}</div>
+          {#if d.errors.length}<ul>{#each d.errors as e}<li class="err-text">{e}</li>{/each}</ul>{/if}
+          <pre class="log">{d.log.join("\n")}</pre>
+        {:else if discovery.error}
+          <div class="err-text">{discovery.error}</div>
+        {:else}
+          <div class="muted">No folder list has been read yet in this session.</div>
+        {/if}
+        <button class="small" onclick={copyDiagnostics}>Copy Diagnostics</button>
+        {#if onopendiagnostics}<button class="link small" onclick={onopendiagnostics}>Open the Diagnostics log</button>{/if}
+      </details>
       <div class="small muted">Folders are remembered by their Outlook ID. If a folder is renamed or moved, the app tries to find it again by its path and tells you.</div>
       <div class="field" style="margin-top:8px"><div class="lbl">Scan</div>
         <div class="stack">
@@ -292,7 +379,7 @@
       {/if}
       {#if busy === "archfolders"}<div class="muted small">Reading folder list…</div>{/if}
       {#if archTree}
-        <div class="treebox panel"><FolderTree node={archTree} selectedId={s.archive_folder?.entry_id ?? ""} onselect={pickArchive} /></div>
+        <div class="treebox panel" role="tree"><FolderTree node={archTree} selectedId={s.archive_folder?.entry_id ?? ""} onselect={pickArchive} expanded={archExpanded} /></div>
       {/if}
       <div class="small muted">The folder is remembered by mailbox and Outlook folder ID (not only its name) and is checked when you save. It must not be a monitored folder.</div>
     </section>
@@ -321,7 +408,7 @@
 
     <section class="panel">
       <h3>Staff Assignment</h3>
-      <p class="small muted">Each staff member has a name, the email address that receives handoff notifications, and their own Outlook folder. Assigning a ticket moves its emails into that folder. A folder also covers its subfolders unless another staff member has a more specific folder. Staff are stored in this computer's database.</p>
+      <p class="small muted">Each staff member has a name, the email address that receives handoff notifications, and optionally their own Outlook folder (needed only for Assign/Reassign, which moves the emails into it). A folder also covers its subfolders unless another staff member has a more specific folder. Names, email addresses and Windows accounts are shared with the team through the shared database; Outlook folders are remembered on this computer only (they are specific to each Outlook profile). The Windows account only pre-selects "I am" on that person's computer; it is not a security control.</p>
       <table class="grid small">
         <thead><tr><th>Name</th><th>Email</th><th>Folder</th><th></th></tr></thead>
         <tbody>
@@ -329,9 +416,9 @@
             <tr class:inactive={!st.active}>
               <td>{st.display_name}{#if !st.active} <span class="badge grey">inactive</span>{/if}{#if me === st.id} <span class="badge">me</span>{/if}</td>
               <td>{st.email}</td>
-              <td>{st.mailbox_name ? `${st.mailbox_name} › ` : ""}{st.folder_path}</td>
+              <td>{#if st.folder_entry_id}{st.mailbox_name ? `${st.mailbox_name} › ` : ""}{st.folder_path}{:else}<span class="muted">no folder on this computer</span>{/if}{#if st.windows_account}<div class="muted">{st.windows_account}</div>{/if}</td>
               <td style="white-space:nowrap">
-                <button class="link small" onclick={() => { editing = { id: st.id, display_name: st.display_name, email: st.email, mailbox_name: st.mailbox_name ?? "", store_id: st.store_id, folder_entry_id: st.folder_entry_id, folder_path: st.folder_path }; staffMsg = null; }}>Edit</button>
+                <button class="link small" onclick={() => { editing = { id: st.id, display_name: st.display_name, email: st.email, mailbox_name: st.mailbox_name ?? "", store_id: st.store_id, folder_entry_id: st.folder_entry_id, folder_path: st.folder_path, windows_account: st.windows_account ?? "" }; staffMsg = null; }}>Edit</button>
                 {#if st.active}<button class="link small" onclick={() => setActive(st, false)}>Deactivate</button>{:else}<button class="link small" onclick={() => setActive(st, true)}>Reactivate</button>{/if}
               </td>
             </tr>
@@ -345,11 +432,12 @@
           <div class="field"><div class="lbl">Display name</div><input bind:value={editing.display_name} placeholder="e.g. Wenjie" /></div>
           <div class="field"><div class="lbl">Email address</div><div><input type="email" bind:value={editing.email} placeholder="name@doh.nj.gov" />
             {#if editing.email && !EMAIL_RE.test(editing.email.trim())}<div class="small" style="color:var(--err)">Not a valid email address</div>{/if}</div></div>
+          <div class="field"><div class="lbl">Windows account</div><div><input bind:value={editing.windows_account} placeholder="DOMAIN\username (optional)" /><div class="small muted">Pre-selects "I am" when this person opens the app on their computer.</div></div></div>
           <div class="field"><div class="lbl">Outlook folder</div>
             <div>
               <div class="row"><b class="small">{editing.folder_path ? `${editing.mailbox_name ? editing.mailbox_name + " › " : ""}${editing.folder_path}` : "not chosen"}</b>
                 <button class="small" onclick={staffFolders} disabled={!!busy}>{busy === "stafffolders" ? "Loading…" : "Choose folder…"}</button></div>
-              {#if staffTree}<div class="treebox panel"><FolderTree node={staffTree} selectedId={editing.folder_entry_id} onselect={pickStaffFolder} /></div>{/if}
+              {#if staffTree}<div class="treebox panel" role="tree"><FolderTree node={staffTree} selectedId={editing.folder_entry_id} onselect={pickStaffFolder} expanded={staffExpanded} /></div>{/if}
             </div></div>
           <div class="row"><span class="grow"></span><button onclick={() => { editing = null; staffTree = null; }}>Cancel</button><button class="primary" onclick={saveStaff} disabled={!!busy}>Save staff member</button></div>
         </div>
@@ -361,7 +449,7 @@
         <div><select style="width:240px" value={me == null ? "" : String(me)} onchange={(e) => setMe((e.target as HTMLSelectElement).value)}>
           <option value="">— not set —</option>
           {#each staffRows.filter((x) => x.active) as st (st.id)}<option value={String(st.id)}>{st.display_name}</option>{/each}
-        </select><div class="small muted">Used by the My Tickets shortcut on this computer.</div></div></div>
+        </select><div class="small muted">Your stable staff identity on this computer: recorded as the author of your notes and changes, and used by My Tickets.</div></div></div>
       <div class="field"><div class="lbl">Send notifications from</div>
         <div><div class="row"><select style="width:300px" bind:value={s.notify_account}>
             <option value="">Outlook's default account</option>
@@ -398,7 +486,13 @@
 <style>
   .page { height: 100%; padding: 16px; }
   section { padding: 12px; margin-top: 12px; }
-  .treebox { max-height: 300px; overflow: auto; padding: 6px; margin-top: 8px; }
+  .treebox { max-height: 340px; overflow: auto; padding: 6px; margin-top: 8px; }
+  .treebox.pick { max-height: 380px; }
+  .planlist { margin: 4px 0; padding-left: 18px; max-height: 200px; overflow: auto; }
+  .log { max-height: 220px; overflow: auto; font-size: 11px; background: var(--bg, #f6f7f9); padding: 6px; white-space: pre-wrap; }
+  .err-text { color: var(--err); }
+  .spinner { display: inline-block; width: 10px; height: 10px; border: 2px solid var(--muted); border-top-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite; vertical-align: -1px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
   .staffform { padding: 10px; margin-top: 8px; }
   tr.inactive td { color: var(--muted); }
   details { margin-top: 6px; }

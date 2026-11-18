@@ -15,28 +15,36 @@ export interface TicketSummary {
   first_received_at?: string; completed_at?: string; needs_review: boolean; low_confidence: boolean; issue_count?: number;
   assignee_staff_id?: number | null; assignee_name?: string | null; assigned_at?: string | null; ownership_conflict: boolean;
   scope_state: "current" | "history" | "unverified"; scope_reason?: string | null; ticket_ref?: string | null; in_scope_count?: number;
+  /** shared-database state of this case */
+  sync_state: SyncState; review_reason?: string | null; new_reply?: boolean;
+  /** unfinished Outlook work, e.g. "assign:failed", "archive:reserved:PC-B", "handoff:uncertain" */
+  outlook_pending?: string | null; last_activity_at?: string | null;
 }
+export type SyncState = "local" | "pending" | "synced" | "conflict" | "failed";
 export interface Ticket extends TicketSummary {
   issue_type_source: string; classification_confidence?: number; conversation_id?: string; internal_notes?: string;
   resolution_notes?: string; source: string; created_at: string; last_response_at?: string; staff_actions?: string; last_prompt_at?: string;
   scope_changed_at?: string | null;
+  shared_version: number; shared_state: "local_only" | "queued" | "shared"; shared_refreshed_at?: string | null;
 }
 export interface IssueRow { issue_type: string; source: string; position: number }
 export interface CompletionRow {
   message_id: number; flagged_at?: string; moved_at?: string; dest_path?: string; last_error?: string; last_error_at?: string; attempts: number;
 }
 export interface CompletionOutcome { done: boolean; flagged: number; moved: number; failed: { message_id: number; subject: string; error: string }[]; dest_path: string }
+export interface DoneDecision { completion_id: string; covered: number; state: "pending" | "accepted" }
+export interface MarkDoneResult { decision: DoneDecision; outlook?: CompletionOutcome | null; outlook_message: string }
 export interface ListQuery {
-  view?: string; status?: string; assignee?: string; reason?: string; school?: string; sender?: string; min_age_days?: number;
+  view?: string; sync?: string; status?: string; assignee?: string; reason?: string; school?: string; sender?: string; min_age_days?: number;
   assigned_from?: string; assigned_to?: string;
   search?: string; issue_type?: string; received_from?: string; received_to?: string;
-  completed_from?: string; completed_to?: string; sort?: string; limit?: number; offset?: number;
+  completed_from?: string; completed_to?: string; sort?: string; limit?: number; offset?: number; outlook?: string;
 }
 export interface Staff {
   id: number; display_name: string; email: string; mailbox_name?: string | null; store_id: string; folder_entry_id: string;
-  folder_path: string; active: boolean; created_at: string; updated_at: string;
+  folder_path: string; active: boolean; created_at: string; updated_at: string; shared_id?: string | null; windows_account?: string | null;
 }
-export interface StaffInput { id?: number | null; display_name: string; email: string; mailbox_name: string; store_id: string; folder_entry_id: string; folder_path: string }
+export interface StaffInput { id?: number | null; display_name: string; email: string; mailbox_name: string; store_id: string; folder_entry_id: string; folder_path: string; windows_account: string }
 export interface AssignPreview { ticket_id: number; display_id: string; from_name?: string | null; to: Staff; emails: number; already_in_folder: number; will_notify: boolean; blocked?: string | null }
 export interface MoveFailure { message_id: number; subject: string; error: string }
 export interface AssignOutcome {
@@ -54,7 +62,7 @@ export interface ScopeStatus {
   configured: boolean; mailbox: string; summary: string; last_ok_at?: string | null; last_attempt_at?: string | null; last_error?: string | null;
   stale: boolean; running: boolean; current: number; history: number; unverified: number;
 }
-export interface OverviewRow { staff_id?: number | null; name: string; active: boolean; folder_path?: string | null; folder_in_scope: boolean; unassigned: number; assigned: number; in_progress: number; done: number }
+export interface OverviewRow { staff_id?: number | null; name: string; active: boolean; folder_path?: string | null; folder_in_scope: boolean; unassigned: number; assigned: number; in_progress: number; review: number; done: number }
 export interface Overview { scope_summary: string; last_reconciled_at?: string | null; done_from: string; done_to: string; rows: OverviewRow[]; awaiting_verification: number; notes: string[] }
 
 export const HISTORY_REASONS: [string, string][] = [
@@ -64,11 +72,14 @@ export const HISTORY_REASONS: [string, string][] = [
 export function reasonLabel(r?: string | null): string {
   return HISTORY_REASONS.find(([k]) => k === r)?.[1] ?? (r || "");
 }
-/** "Unassigned" / "Assigned to Aaron" / "In Progress — Aaron" / "Done — Aaron" */
+/** "Unassigned" / "Assigned to Aaron" / "In Progress — Aaron" / "Review — Aaron" / "Done — Aaron" */
 export function statusText(status: string, assignee?: string | null): string {
   if (status === "Unassigned" || !assignee) return status;
   if (status === "Assigned") return `Assigned to ${assignee}`;
   return `${status} — ${assignee}`;
+}
+export function statusBadge(status: string): string {
+  return status === "Done" ? "grey" : status === "Unassigned" ? "warn" : status === "Review" ? "err" : "ok";
 }
 export interface TicketField {
   key: string; extracted_value?: string; extraction_confidence?: string; manual_value?: string | null; verified: boolean;
@@ -83,7 +94,87 @@ export interface HistoryRow { id: number; at: string; actor: string; action: str
 export interface TicketDetail {
   ticket: Ticket; fields: TicketField[]; messages: MessageRow[]; history: HistoryRow[];
   issues: IssueRow[]; schools: number[]; completion: CompletionRow[]; assignments: AssignmentOp[];
+  notes: Note[]; ownership: OwnershipRow[]; completions: CompletionDecision[]; conflicts: LocalConflict[]; pending_ops: OpRow[];
+  outlook_ops: OutlookOpRow[]; outlook_pending?: string | null;
 }
+export interface OutlookOpRow {
+  outlook_op_id: string; kind: "assign" | "archive"; state: string; active: boolean; notify_state?: string | null; device_name?: string | null; staff_name?: string | null;
+  email_count: number; moved_count: number; last_error?: string | null; created_at: string; updated_at: string; finished_at?: string | null;
+}
+export interface Suggestion {
+  ticket_id: number; display_id: string; ticket_ref?: string | null; status: string; owner?: string | null; subject?: string | null; school?: string | null;
+  received_at?: string | null; score: number; reasons: string[]; linked: boolean; relation_id?: string | null;
+}
+export interface LinkedCase {
+  relation_id: string; relation_type: string; status: string; ticket_id?: number | null; display_id?: string | null; ticket_ref?: string | null;
+  case_status?: string | null; subject?: string | null; evidence?: string | null;
+}
+export interface MergeSource { ticket_id: number; display_id: string; ticket_ref?: string | null; status: string; owner?: string | null; emails: number; notes: number; schools: string[]; issues: string[]; blocked?: string | null; warnings: string[] }
+export interface MergePreview {
+  target_id: number; target_display: string; target_ref?: string | null; target_status: string; target_owner?: string | null; sources: MergeSource[];
+  emails_after: number; notes_after: number; schools_after: string[]; issues_after: string[]; status_after: string; can_run: boolean;
+}
+export interface MergeResult { ticket_id: number; display_id: string; ok: boolean; message: string }
+export interface TimelineItem { at: string; kind: "email" | "note" | "owner" | "done" | "outlook" | "history"; actor?: string | null; title: string; detail?: string | null; ref_id?: string | null }
+export interface BulkResult { ticket_id: number; display_id: string; ok: boolean; outcome: "done" | "unchanged" | "failed"; message: string }
+export interface BulkOutcome { results: BulkResult[]; ok: number; failed: number }
+export interface StaffLoad {
+  staff_id?: number | null; name: string; active: boolean; assigned: number; in_progress: number; review: number; unresolved: number; older: number;
+  oldest_days?: number | null; done_7d: number; done_30d: number; outlook_pending: number; conflicts: number;
+}
+export interface AgingCase { ticket_id: number; display_id: string; ticket_ref?: string | null; status: string; owner?: string | null; school?: string | null; subject?: string | null; age_days: number; idle_days: number }
+export interface TeamOverview {
+  old_days: number; total_open: number; unassigned: number; review: number; older: number; stale: number; outlook_pending: number; sync_pending: number; sync_held: number;
+  conflicts_open: number; done_7d: number; rows: StaffLoad[]; oldest: AgingCase[]; shared_last_success_at?: string | null; notes: string[];
+}
+export interface ActivitySummary { actor: string; actions_7d: number; cases_7d: number; last_at?: string | null }
+export interface ActivityRow { at: string; actor: string; action: string; ticket_id: number; display_id: string; ticket_ref?: string | null; detail?: string | null }
+export interface IntegrityReport { database_id: string; display_name: string; environment: string; schema_version: number; missing_tables: string[]; counts: [string, number][]; checks: [string, number][]; ok: boolean }
+export interface UpgradeReport { from_version: number; to_version: number; backup_path: string; backup_sha256: string; tables_added: string[] }
+export interface ProfileInfo { name: string; test_mode: boolean; outlook: "live" | "mock"; data_dir: string; device_id: string }
+
+/** Plain-language label for the unfinished-Outlook-work indicator. */
+export function outlookPendingLabel(v?: string | null): string {
+  if (!v) return "";
+  const [kind, state, device] = v.split(":");
+  const what = kind === "assign" ? "Assignment moves" : kind === "archive" ? "Archiving" : kind === "handoff" ? "Handoff email" : kind;
+  const st: Record<string, string> = { reserved: "in progress", moving: "in progress", moved: "moved", failed: "failed — retry", sending: "sending", pending: "not sent yet", uncertain: "uncertain — check Sent Items" };
+  return `${what}: ${st[state] ?? state}${device ? ` (${device})` : ""}`;
+}
+export interface Note { note_id: string; author_name: string; body: string; created_at: string; updated_at: string; origin: string; sync_state: "" | "pending" | "conflict" }
+export interface OwnershipRow { staff_name?: string | null; started_at: string; ended_at?: string | null; started_by?: string | null; start_reason?: string | null; end_reason?: string | null; origin: string }
+export interface CompletionDecision { completion_id: string; actor_name?: string | null; decided_at: string; covered: number; state: string; state_reason?: string | null }
+export interface LocalConflict {
+  conflict_id: string; op_id: string; ticket_id?: number | null; ticket_ref?: string | null; field_name?: string | null; conflict_type: string;
+  original_value?: string | null; proposed_value?: string | null; shared_value?: string | null; reason?: string | null;
+  status: "open" | "resolving" | "resolved"; op_type?: string | null; staff_name?: string | null; created_at: string;
+}
+export interface OpRow { op_id: string; op_type: string; state: string; created_at: string; attempts: number; last_error?: string | null; hold_reason?: string | null; staff_name: string }
+export interface QueueSummary { pending: number; held: number; conflicts: number; rejected: number; isolated: number; oldest_pending_at?: string | null; last_error?: string | null }
+export interface DbIdentity { database_id: string; display_name: string; environment: string; schema_version: number; min_client_protocol: number; maintenance: boolean; maintenance_message: string; created_at: string }
+export interface CycleReport {
+  identity?: DbIdentity | null; binding: string; writable: boolean; pushed: number; accepted: number; conflicts: number; rejected: number;
+  replayed: number; pulled: number; staff: number; full_reconcile: boolean; held: number; elapsed_ms: number;
+}
+export interface SharedStatus {
+  mode: "shared" | "standalone"; path: string;
+  state: "standalone" | "not_checked" | "connected" | "read_only" | "unavailable" | "driver_missing" | "locked" | "no_permission" | "incompatible" | "maintenance" | "identity_changed" | "error";
+  reachable?: boolean | null; readable?: boolean | null; writable?: boolean | null;
+  database_id?: string | null; database_name?: string | null; environment?: string | null; schema_version?: number | null; compatibility?: string | null;
+  app_schema_version: number; bound_database_id?: string | null; bound_database_name?: string | null; driver?: string | null;
+  error_code?: string | null; error_message?: string | null; provider_detail?: string | null;
+  last_success_at?: string | null; last_attempt_at?: string | null; next_attempt_at?: string | null;
+  queue: QueueSummary; running: boolean; last_report?: CycleReport | null; consecutive_failures: number; empty_database: boolean;
+}
+export interface InitReport { identity: DbIdentity; backup_path: string; backup_sha256: string; tables_created: string[] }
+export interface ImportPreview { local_only: number; with_message_id: number; without_message_id: number; done: number; open: number; staff: number; already_shared?: number | null; held_ops: number }
+export interface DiagEvent { id: number; at: string; severity: "info" | "warning" | "error"; component: string; code?: string | null; summary: string; detail?: string | null; correlation?: string | null }
+export interface DiagHeader {
+  app_version: string; local_schema: number; shared_mode: string; shared_state: string; shared_database?: string | null; shared_environment?: string | null;
+  shared_schema?: number | null; last_success_at?: string | null; pending: number; held: number; conflicts: number; failed: number; driver?: string | null; device: string;
+}
+export interface DiagOverview { header: DiagHeader; latest_error_id?: number | null; log_dir: string }
+export const SYNC_LABEL: Record<SyncState, string> = { local: "Local only", pending: "Saved locally — pending sync", synced: "Synced", conflict: "Conflict — review required", failed: "Failed — retry available" };
 export interface ListResult { rows: TicketSummary[]; total: number; counts: [string, number][] }
 export interface Unresolved { key: string; label: string; known: boolean }
 export interface DraftCheck { unresolved: Unresolved[]; unverified_claims: string[]; sop_status?: string; sop_reference?: string }
@@ -105,19 +196,39 @@ export interface FolderRef { store_id: string; entry_id: string; path: string }
 export interface Settings {
   mailbox_name: string; mailbox_store_id: string; folder: FolderRef | null; subfolder_mode: string; selected_subfolders: FolderRef[];
   selected_with_children: string[];
+  /** folders (and their subtrees) never scanned, e.g. "Inbox/NJIIS Team/Completed"; missing in older settings */
+  excluded_folders: FolderRef[];
   sync_enabled: boolean; interval_minutes: number; check_on_startup: boolean; launch_at_login: boolean; close_to_tray: boolean;
   initial_lookback_days: number; overlap_minutes: number; full_rescan_hours: number; max_messages_per_sync: number; body_max_chars: number;
   python_path: string; staff_name: string; default_assigned_staff: string; asr_deadline: string; internal_senders: string[];
   duplicate_window_days: number; open_outlook_draft_after_create: boolean;
   scan_mode: "all" | "unread"; archive_folder: FolderRef | null; archive_mailbox_name: string; prompt_instructions: string;
-  notify_account: string;
+  notify_account: string; shared_mode: "shared" | "standalone"; shared_db_path: string; shared_sync_minutes: number;
 }
 export interface IngestReport { seen: number; new_messages: number; already_imported: number; moved: number; created_tickets: number; updated_tickets: number; skipped_internal: number; duplicates_flagged: number }
 export interface SyncStatus {
   running: boolean; last_run_at?: string; last_success_at?: string; last_error?: string; last_error_code?: string;
   last_report?: IngestReport; next_run_at?: string; folder_display?: string; warnings: string[];
 }
-export interface FolderNode { name: string; entry_id: string; store_id: string; path: string; children: FolderNode[] }
+export interface FolderNode {
+  name: string; entry_id: string; store_id: string; path: string; children: FolderNode[];
+  /** full Outlook path incl. mailbox, e.g. \Mailbox\Inbox\Wenjie */
+  outlook_path?: string; parent_entry_id?: string; parent_store_id?: string;
+  /** Outlook DefaultItemType (0 = mail) */
+  item_type?: number | null; unread_count?: number | null;
+  /** false = the folder exists but cannot be opened (no permission) */
+  accessible?: boolean;
+  /** set when this folder's subfolders could not be read (never shown as "no child folders") */
+  error?: string | null; error_detail?: string;
+  child_count?: number; has_children?: boolean;
+  /** false = below the discovery depth or unreadable: children not listed here */
+  children_loaded?: boolean;
+}
+export interface FolderDiscovery {
+  hierarchy_source: string; mapi_error?: string | null; immediate_children: number; descendants: number; problems: number;
+  repaired: string[]; errors: string[]; elapsed_ms: number; log: string[];
+}
+export interface FolderListing { store_id: string; mailbox?: string; root: FolderNode; discovery?: FolderDiscovery }
 export interface Report {
   total: number; open: number; by_status: [string, number][]; by_issue: [string, string, number][]; by_school_verification: [string, number][];
   created_last_7_days: number; created_last_30_days: number; open_older_than_7_days: number; followups_due: number;
@@ -143,7 +254,14 @@ export const api = {
   addSchool: (id: number) => invoke<number>("ticket_add_school", { id }),
   removeSchool: (id: number, slot: number) => invoke<void>("ticket_remove_school", { id, slot }),
   reopen: (id: number) => invoke<Ticket>("ticket_reopen", { id }),
-  complete: (id: number) => invoke<CompletionOutcome>("ticket_complete", { id }),
+  complete: (id: number) => invoke<MarkDoneResult>("ticket_complete", { id }),
+  archiveOutlook: (id: number) => invoke<CompletionOutcome>("ticket_archive_outlook", { id }),
+  claim: (id: number, takeover: boolean) => invoke<Ticket>("ticket_claim", { id, takeover }),
+  release: (id: number) => invoke<Ticket>("ticket_release", { id }),
+  flagReview: (id: number, reason: string) => invoke<Ticket>("ticket_flag_review", { id, reason }),
+  resume: (id: number) => invoke<Ticket>("ticket_resume", { id }),
+  join: (id: number, target: string) => invoke<Ticket>("ticket_join", { id, target }),
+  conflictRetry: (conflictId: string) => invoke<void>("conflict_retry", { conflictId }),
   prompt: (id: number) => invoke<string>("prompt_get", { id }),
   promptCopied: (id: number, text: string) => invoke<string>("prompt_copied", { id, text }),
   promptDefault: () => invoke<string>("prompt_default_instructions"),
@@ -198,7 +316,7 @@ export const api = {
   outlookTest: () => invoke<Record<string, unknown>>("outlook_test"),
   mailboxes: () => invoke<{ mailboxes: { display_name: string; store_id: string }[] }>("outlook_list_mailboxes"),
   folders: (storeId: string | null, sharedMailbox: string | null, rootEntryId: string | null = null) =>
-    invoke<{ store_id: string; root: FolderNode }>("outlook_list_folders", { storeId, sharedMailbox, rootEntryId }),
+    invoke<FolderListing>("outlook_list_folders", { storeId, sharedMailbox, rootEntryId }),
   syncNow: () => invoke<{ report: IngestReport; warnings: string[]; folders: number }>("sync_now"),
   syncStatus: () => invoke<SyncStatus>("sync_status"),
 
@@ -209,6 +327,47 @@ export const api = {
   backup: (path: string) => invoke<void>("db_backup", { path }),
   restore: (path: string) => invoke<string>("db_restore", { path }),
   appInfo: () => invoke<AppInfo>("app_info"),
+
+  sharedStatus: () => invoke<SharedStatus>("shared_status"),
+  sharedTest: () => invoke<SharedStatus>("shared_test_connection"),
+  sharedSyncNow: () => invoke<SharedStatus>("shared_sync_now"),
+  sharedSaveConfig: (mode: string, path: string, minutes: number | null) => invoke<Settings>("shared_save_config", { mode, path, minutes }),
+  sharedReleaseHeld: () => invoke<number>("shared_release_held"),
+  sharedDiscardHeld: () => invoke<number>("shared_discard_held"),
+  sharedSwitchDatabase: (databaseId: string) => invoke<number>("shared_switch_database", { databaseId }),
+  sharedImportPreview: () => invoke<ImportPreview>("shared_import_preview"),
+  sharedImportRun: (limit: number | null) => invoke<number>("shared_import_run", { limit }),
+  sharedCreateDatabase: (path: string, name: string, environment: string) => invoke<DbIdentity>("shared_create_database", { path, name, environment }),
+  sharedInitializeExisting: (path: string, name: string, environment: string) => invoke<InitReport>("shared_initialize_existing", { path, name, environment }),
+  notesAdd: (ticketId: number, body: string) => invoke<Note>("notes_add", { ticketId, body }),
+  notesEdit: (noteId: string, body: string) => invoke<void>("notes_edit", { noteId, body }),
+  notesDelete: (noteId: string) => invoke<void>("notes_delete", { noteId }),
+  conflicts: (ticketId: number | null, includeResolved: boolean) => invoke<LocalConflict[]>("conflicts_list", { ticketId, includeResolved }),
+  conflictAcceptShared: (conflictId: string) => invoke<void>("conflict_accept_shared", { conflictId }),
+  diagRecent: (minSeverity: string, limit: number) => invoke<DiagEvent[]>("diag_recent", { minSeverity, limit }),
+  diagOverview: () => invoke<DiagOverview>("diag_overview"),
+  diagCopyText: (ids: number[] | null, minSeverity: string) => invoke<string>("diag_copy_text", { ids, minSeverity }),
+  diagReport: (component: string, code: string, summary: string) => invoke<void>("diag_report", { component, code, summary }),
+
+  relatedSuggestions: (id: number) => invoke<Suggestion[]>("related_suggestions", { id }),
+  ticketLinks: (id: number) => invoke<LinkedCase[]>("ticket_links", { id }),
+  ticketLink: (id: number, target: string) => invoke<string>("ticket_link", { id, target }),
+  ticketLinkSet: (id: number, relationId: string, status: "linked" | "dismissed" | "removed") => invoke<void>("ticket_link_set", { id, relationId, status }),
+  emailMove: (id: number, messageId: number, target: string) => invoke<number>("email_move", { id, messageId, target }),
+  mergePreview: (sources: number[], target: number) => invoke<MergePreview>("merge_preview", { sources, target }),
+  mergeRun: (sources: number[], target: number) => invoke<MergeResult[]>("merge_run", { sources, target }),
+  timeline: (id: number) => invoke<TimelineItem[]>("ticket_timeline", { id }),
+  openMessage: (ticketId: number, messageId: number) => invoke<void>("outlook_open_message", { ticketId, messageId }),
+  bulk: (action: string, ids: number[], reason: string | null = null) => invoke<BulkOutcome>("tickets_bulk", { action, ids, reason }),
+  exportSelected: (path: string, ids: number[]) => invoke<number>("export_selected", { path, ids }),
+  teamOverview: (oldDays: number, staleDays: number) => invoke<TeamOverview>("team_overview", { oldDays, staleDays }),
+  staffActivity: (actorName: string | null, limit: number) => invoke<{ summary: ActivitySummary[]; rows: ActivityRow[] }>("staff_activity", { actorName, limit }),
+  diagExport: (path: string, minSeverity: string) => invoke<number>("diag_export", { path, minSeverity }),
+  diagTestOutlook: () => invoke<Record<string, unknown>>("diag_test_outlook"),
+  sharedIntegrity: () => invoke<IntegrityReport>("shared_integrity"),
+  sharedBackupNow: (destDir: string | null) => invoke<[string, string]>("shared_backup_now", { destDir }),
+  sharedUpgrade: () => invoke<UpgradeReport>("shared_upgrade"),
+  profileInfo: () => invoke<ProfileInfo>("profile_info"),
 };
 
 // ------------------------------------------------------------ helpers

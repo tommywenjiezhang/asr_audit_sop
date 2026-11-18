@@ -33,7 +33,7 @@ fn scalar(conn: &Connection, sql: &str) -> AppResult<i64> {
 }
 
 pub fn report(conn: &Connection) -> AppResult<Report> {
-    let open_set = "('Unassigned','Assigned','In Progress')";
+    let open_set = "('Unassigned','Assigned','In Progress','Review')";
     let by_issue_raw = pairs(conn, "SELECT issue_type, COUNT(*) FROM tickets GROUP BY issue_type ORDER BY 2 DESC")?;
     let by_issue = by_issue_raw
         .into_iter()
@@ -84,6 +84,15 @@ pub fn export_csv(conn: &Connection, path: &Path, status: &str) -> AppResult<usi
             break;
         }
     }
+    write_csv(conn, path, &ids)
+}
+
+/// Export exactly these cases (bulk "Export selected").
+pub fn export_ids(conn: &Connection, path: &Path, ids: &[i64]) -> AppResult<usize> {
+    write_csv(conn, path, ids)
+}
+
+fn write_csv(conn: &Connection, path: &Path, ids: &[i64]) -> AppResult<usize> {
     let mut field_keys: BTreeSet<String> = BTreeSet::new();
     let mut st = conn.prepare("SELECT DISTINCT field_key FROM ticket_fields")?;
     for k in st.query_map([], |r| r.get::<_, String>(0))? {
@@ -93,12 +102,12 @@ pub fn export_csv(conn: &Connection, path: &Path, status: &str) -> AppResult<usi
         "Ticket ID", "Status", "Priority", "Issue Type", "School NJIIS ID", "School Name", "School Verification", "Sender",
         "Sender Email", "Original Subject", "Assigned Staff", "Date Created", "Last Updated", "Last Email Received",
         "Last Response", "Next Follow-up", "Possible Duplicate Of", "Internal Notes", "Resolution Notes",
-        "First Received", "Completed", "Staff Actions",
+        "First Received", "Completed", "Staff Actions", "Reference", "Owner", "Review Reason",
     ];
     let mut out = String::from("\u{feff}");
     out.push_str(&header.iter().map(|h| csv_cell(h)).chain(field_keys.iter().map(|k| csv_cell(&format!("Field: {k}")))).collect::<Vec<_>>().join(","));
     out.push_str("\r\n");
-    for id in &ids {
+    for id in ids {
         let t = crate::tickets::get(conn, *id)?;
         let fs = crate::tickets::fields(conn, *id)?;
         let issue = catalog().issue(&t.issue_type).map(|i| i.name.clone()).unwrap_or(t.issue_type.clone());
@@ -108,7 +117,7 @@ pub fn export_csv(conn: &Connection, path: &Path, status: &str) -> AppResult<usi
             t.school_verification.clone(), o(&t.sender_name), o(&t.sender_email), o(&t.original_subject), o(&t.assigned_staff),
             t.created_at.clone(), t.updated_at.clone(), o(&t.last_email_received_at), o(&t.last_response_at), o(&t.next_followup_date),
             t.possible_duplicate_of.map(crate::tickets::display_id).unwrap_or_default(), o(&t.internal_notes), o(&t.resolution_notes),
-            o(&t.first_received_at), o(&t.completed_at), o(&t.staff_actions),
+            o(&t.first_received_at), o(&t.completed_at), o(&t.staff_actions), o(&t.ticket_ref), o(&t.assignee_name), o(&t.review_reason),
         ];
         for k in &field_keys {
             row.push(fs.iter().find(|f| &f.key == k).map(|f| crate::render::display_value(&f.effective)).unwrap_or_default());

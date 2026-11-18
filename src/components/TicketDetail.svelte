@@ -1,9 +1,12 @@
 <script lang="ts">
-  import { api, condMatches, copyText, errMsg, fmtDate, reasonLabel, statusText, type AssignmentOp, type FieldDef, type TicketDetail } from "../lib/api";
+  import { api, condMatches, copyText, errMsg, fmtDate, outlookPendingLabel, reasonLabel, statusBadge, statusText, SYNC_LABEL, type AssignmentOp, type FieldDef, type LocalConflict, type TicketDetail } from "../lib/api";
   import { app, issueName, toast } from "../lib/stores.svelte";
   import FieldInput from "./FieldInput.svelte";
+  import MergeDialog from "./MergeDialog.svelte";
+  import RelatedCases from "./RelatedCases.svelte";
+  import Timeline from "./Timeline.svelte";
 
-  let { id, onchanged, onassign }: { id: number; onchanged: () => void; onassign?: (ids: number[]) => void } = $props();
+  let { id, onchanged, onassign, onopen }: { id: number; onchanged: () => void; onassign?: (ids: number[]) => void; onopen?: (id: number) => void } = $props();
 
   type Msg = { kind: "ok" | "err" | "info"; text: string } | null;
 
@@ -11,7 +14,16 @@
   let err = $state("");
   let prompt = $state("");
   let promptErr = $state("");
-  let busy = $state<"" | "copy" | "reply" | "both" | "done" | "reopen" | "assign" | "start" | "notify">("");
+  let busy = $state<"" | "copy" | "reply" | "both" | "done" | "reopen" | "assign" | "start" | "notify" | "claim" | "review" | "archive" | "join">("");
+  let me = $state<number | null>(null);
+  api.currentStaff().then((v) => (me = v)).catch(() => {});
+  /** with a confirmed shared database, Outlook steps are coordinated through shared reservations */
+  const sharedBound = $derived(app.shared?.mode === "shared" && !!app.shared?.bound_database_id);
+  let mergeSources = $state<number[] | null>(null);
+  let histTab = $state<"timeline" | "raw">("timeline");
+  let tlVersion = $state(0);
+  let joinTarget = $state("");
+  let showJoin = $state(false);
   let assignMsg = $state<Msg>(null);
   let copyMsg = $state<Msg>(null);
   let outlookMsg = $state<Msg>(null);
@@ -120,9 +132,37 @@
     try { await track(api.removeSchool(id, slot)); await load(); } catch (e) { toast(errMsg(e), "error"); }
   }
 
-  let notes = $state("");
   let actions = $state("");
-  $effect(() => { notes = d?.ticket.internal_notes ?? ""; actions = d?.ticket.staff_actions ?? ""; });
+  $effect(() => { actions = d?.ticket.staff_actions ?? ""; });
+
+  // ---------------------------------------------------------------- notes (one record per note; shared)
+  let newNote = $state("");
+  let editNote = $state<{ id: string; body: string } | null>(null);
+  async function addNote() {
+    if (!newNote.trim()) return;
+    try { await track(api.notesAdd(id, newNote)); newNote = ""; await load(); onchanged(); } catch (e) { toast(errMsg(e), "error"); }
+  }
+  async function saveNoteEdit() {
+    if (!editNote) return;
+    try { await track(api.notesEdit(editNote.id, editNote.body)); editNote = null; await load(); } catch (e) { toast(errMsg(e), "error"); }
+  }
+  async function deleteNote(noteId: string) {
+    if (!confirm("Delete this note? It stays in the case history as deleted.")) return;
+    try { await track(api.notesDelete(noteId)); await load(); } catch (e) { toast(errMsg(e), "error"); }
+  }
+
+  // ---------------------------------------------------------------- shared-database conflicts
+  function conflictLabel(c: LocalConflict): string {
+    const f = c.field_name ?? "";
+    if (f.startsWith("field:")) return `Field “${f.slice(6)}”`;
+    if (f.startsWith("note:")) return "Note";
+    if (f === "staff_actions") return "Staff actions already taken";
+    if (f === "issues") return "Issue types";
+    return f || c.conflict_type;
+  }
+  async function acceptShared(c: LocalConflict) {
+    try { await api.conflictAcceptShared(c.conflict_id); await load(); onchanged(); toast("Kept the shared value. The conflict closes when the shared database confirms.", "ok"); } catch (e) { toast(errMsg(e), "error"); }
+  }
 
   // ---------------------------------------------------------------- actions
 
@@ -192,21 +232,64 @@
     failures = [];
     try {
       await settle();
-      const o = await api.complete(id);
-      if (o.done) {
-        doneMsg = { kind: "ok", text: o.dest_path ? `Done. ${o.moved} email(s) flagged complete and moved to ${o.dest_path}.` : "Done." };
-        toast("Ticket marked Done", "ok");
-      } else {
-        failures = o.failed;
-        doneMsg = { kind: "err", text: "Not all Outlook steps succeeded. The ticket stays In Progress. Fix the problem, then click Retry — finished steps are not repeated." };
-      }
+      const r = await api.complete(id);
+      const pending = r.decision.state === "pending" ? " Saved locally — it is sent to the shared database automatically." : "";
+      if (r.outlook && !r.outlook.done) failures = r.outlook.failed;
+      doneMsg = { kind: r.outlook && !r.outlook.done ? "err" : "ok", text: `Done (${r.decision.covered} incoming email(s) covered).${pending} ${r.outlook_message}` };
+      toast("Case marked Done", "ok");
     } catch (e) {
-      const code = (e as { code?: string })?.code;
-      doneMsg = { kind: "err", text: code === "NOT_CONFIGURED" ? errMsg(e) : `Mark Done failed: ${errMsg(e)} The ticket stays In Progress; click Retry when Outlook is available.` };
+      doneMsg = { kind: "err", text: `Mark Done failed: ${errMsg(e)}` };
     }
     await load();
     onchanged();
   }
+
+  async function archiveOutlook() {
+    doneMsg = null;
+    failures = [];
+    try {
+      const o = await api.archiveOutlook(id);
+      if (o.done) doneMsg = { kind: "ok", text: o.dest_path ? `Outlook updated: ${o.moved} email(s) flagged complete and moved to ${o.dest_path}.` : "Nothing left to archive in Outlook." };
+      else { failures = o.failed; doneMsg = { kind: "err", text: "Some Outlook steps failed. The case stays Done. Fix the problem and retry — finished steps are not repeated." }; }
+    } catch (e) {
+      doneMsg = { kind: "err", text: `Outlook not updated: ${errMsg(e)} The case stays Done.` };
+    }
+    await load();
+  }
+
+  async function claim(takeover: boolean) {
+    if (takeover && !confirm(`Take over this case from ${d?.ticket.assignee_name}? Their notes, history and ownership dates are kept. No email is moved and nobody is notified.`)) return;
+    try { await api.claim(id, takeover); await load(); onchanged(); toast(takeover ? "You took over the case." : "Claimed. No email was moved.", "ok"); }
+    catch (e) { toast(errMsg(e), "error"); }
+  }
+  async function releaseOwner() {
+    if (!confirm("Clear the owner of this case? It becomes Unassigned (a Review case stays in Review). No email is moved.")) return;
+    try { await api.release(id); await load(); onchanged(); } catch (e) { toast(errMsg(e), "error"); }
+  }
+  async function flagReview() {
+    const reason = window.prompt("Reason for review (required):", "");
+    if (reason == null) return;
+    try { await api.flagReview(id, reason); await load(); onchanged(); } catch (e) { toast(errMsg(e), "error"); }
+  }
+  async function resumeReview() {
+    try { await api.resume(id); await load(); onchanged(); } catch (e) { toast(errMsg(e), "error"); }
+  }
+  async function joinCase() {
+    if (!joinTarget.trim()) return;
+    if (!confirm(`Add this case to ${joinTarget.trim()}? Its emails, notes and issue types move to that case; this reference stays searchable and redirects there. No email is moved in Outlook and nobody is notified.`)) return;
+    try {
+      const t = await api.join(id, joinTarget.trim());
+      toast(`Added to ${t.display_id}.`, "ok");
+      showJoin = false; joinTarget = "";
+      onchanged();
+      onopen?.(t.id);
+    } catch (e) { toast(errMsg(e), "error"); }
+  }
+  async function retryConflict(c: LocalConflict) {
+    try { await api.conflictRetry(c.conflict_id); await load(); onchanged(); toast("Retried against the latest shared version.", "ok"); } catch (e) { toast(errMsg(e), "error"); }
+  }
+  const outlookPending = $derived(!!d && d.ticket.status === "Done" && (d.messages ?? []).some((m) => !m.is_internal && m.entry_id && !d!.completion.find((c) => c.message_id === m.id)?.moved_at));
+  const contributors = $derived([...new Set([...(d?.notes ?? []).map((n) => n.author_name), ...(d?.ownership ?? []).map((o) => o.staff_name ?? "")].filter(Boolean))]);
 
   async function reopen() {
     try {
@@ -263,6 +346,22 @@
   async function refreshBody(mid: number) {
     try { await api.refreshMessage(mid); await load(); } catch (e) { toast(errMsg(e), "error"); }
   }
+  async function openOriginal(mid: number) {
+    try { await api.openMessage(id, mid); } catch (e) { toast(errMsg(e), "error"); }
+  }
+  async function moveEmail(mid: number, subject?: string) {
+    const target = window.prompt(`Move "${subject ?? "this email"}" to which case? (T-000123 or ASR-…)\nUse this when the email was added to the wrong case. The email itself is not changed in Outlook.`);
+    if (!target?.trim()) return;
+    try {
+      const tid = await api.emailMove(id, mid, target.trim());
+      toast(`Email moved to T-${String(tid).padStart(6, "0")}.`, "ok");
+      await load();
+      tlVersion++;
+      onchanged();
+    } catch (e) {
+      toast(errMsg(e), "error");
+    }
+  }
 </script>
 
 {#if err}
@@ -275,13 +374,16 @@
     <div class="panel pad actionbar">
       <div class="row wrap">
         <h2 style="margin:0">{t.display_id}</h2>
-        <span class="badge {isDone ? 'grey' : t.status === 'Unassigned' ? 'warn' : 'ok'}">{statusText(t.status, t.assignee_name)}</span>
+        <span class="badge {statusBadge(t.status)}">{statusText(t.status, t.assignee_name)}</span>
         {#if t.ownership_conflict}<span class="badge err" title="The ticket's emails are in more than one staff folder. The owner was not changed automatically.">Ownership conflict</span>{/if}
         {#if t.scope_state === "history"}<span class="badge grey" title="Emails no longer in the selected folders">Ticket History: {reasonLabel(t.scope_reason)}</span>{/if}
         {#if t.scope_state === "unverified"}<span class="badge warn">Awaiting verification</span>{/if}
         {#if t.low_confidence}<span class="badge warn" title="The issue type was guessed with low confidence - please check it">Check issue type</span>{/if}
         {#if t.possible_duplicate_of}<span class="badge warn">Possible duplicate of T-{String(t.possible_duplicate_of).padStart(6, "0")}</span>{/if}
         {#if t.needs_review}<span class="badge warn">Needs review</span>{/if}
+        {#if t.sync_state !== "synced"}<span class="badge {t.sync_state === 'conflict' || t.sync_state === 'failed' ? 'err' : 'grey'}" title={t.shared_refreshed_at ? `Shared copy refreshed ${fmtDate(t.shared_refreshed_at)}` : ""}>{SYNC_LABEL[t.sync_state]}</span>{/if}
+        {#if d.outlook_pending}<span class="badge {d.outlook_pending.includes('failed') || d.outlook_pending.includes('uncertain') ? 'err' : 'warn'}" title="Outlook work for this case is not finished (separate from the case status)">{outlookPendingLabel(d.outlook_pending)}</span>{/if}
+        {#if t.ticket_ref}<span class="small muted" title="Stable reference, the same on every computer">{t.ticket_ref}</span>{/if}
         <span class="grow"></span>
         <span class="small muted">Received {fmtDate(t.first_received_at ?? t.created_at) || "—"}{#if t.completed_at}&nbsp;· Completed {fmtDate(t.completed_at)}{/if}</span>
       </div>
@@ -292,16 +394,37 @@
         <button disabled={!!busy} onclick={() => run("reply", () => openReply(true))} title="Reply to everyone on the email">Reply All</button>
         <button disabled={!!busy} onclick={() => run("both", copyAndOpen)}>{busy === "both" ? "Working…" : "Copy Prompt & Open Outlook Reply"}</button>
         <span class="grow"></span>
+      </div>
+      <div class="row wrap actions">
         {#if !isDone}
-          <button disabled={!!busy} onclick={() => onassign?.([id])} title="Move the ticket's emails to a staff folder and notify that person">{t.assignee_staff_id ? "Reassign" : "Assign"}</button>
-          {#if t.status === "Assigned"}<button disabled={!!busy} onclick={() => run("start", startWork)}>Start Work</button>{/if}
+          {#if !t.assignee_staff_id}
+            <button disabled={!!busy || me == null} title={me == null ? "Choose who you are in Settings › Staff Assignment" : "Become the owner. No email is moved and nobody is notified."} onclick={() => run("claim", () => claim(false))}>Claim</button>
+          {:else if t.assignee_staff_id !== me}
+            <button disabled={!!busy || me == null} title="Become the owner; the previous owner's work and dates are kept" onclick={() => run("claim", () => claim(true))}>Take over…</button>
+          {/if}
+          {#if t.assignee_staff_id}<button class="link small" disabled={!!busy} onclick={releaseOwner}>Clear owner</button>{/if}
+          <button disabled={!!busy} onclick={() => onassign?.([id])} title="Move the ticket's emails to a staff folder and notify that person{sharedBound ? ' (coordinated through the shared database: only one computer can run it)' : ''}">{t.assignee_staff_id ? "Reassign" : "Assign"}</button>
+          {#if t.assignee_staff_id && (t.status === "Assigned" || t.status === "Review")}<button disabled={!!busy} onclick={() => run("start", startWork)}>Start Work</button>{/if}
+          {#if t.status === "Review"}<button disabled={!!busy} onclick={() => run("review", resumeReview)} title="The review is handled; continue the work">Review handled</button>
+          {:else}<button disabled={!!busy} onclick={() => run("review", flagReview)}>Flag for Review…</button>{/if}
         {/if}
         {#if isDone}
+          {#if outlookPending}<button disabled={!!busy} onclick={() => run("archive", archiveOutlook)} title="Flag complete and move the emails covered by the Done decision">{busy === "archive" ? "Updating Outlook…" : "Archive in Outlook"}</button>{/if}
           <button disabled={!!busy} onclick={() => run("reopen", reopen)}>Reopen</button>
         {:else}
-          <button class="done" disabled={!!busy} onclick={() => run("done", markDone)}>{busy === "done" ? "Completing…" : failures.length || d.completion.some((c) => c.last_error) ? "3. Retry Mark Done" : "3. Mark Done"}</button>
+          <button class="done" disabled={!!busy} onclick={() => run("done", markDone)}>{busy === "done" ? "Saving…" : "3. Mark Done"}</button>
         {/if}
+        <button class="link small" onclick={() => (showJoin = !showJoin)}>Add to existing case…</button>
+        <button class="link small" onclick={() => (mergeSources = [])} title="Combine other tickets into this case (preview first)">Combine cases…</button>
       </div>
+      {#if showJoin}
+        <div class="row small" style="margin-top:6px">
+          <span>Add this case to</span><input style="width:180px" bind:value={joinTarget} placeholder="T-000123 or ASR-1A2B3C4D" />
+          <button class="small" disabled={!joinTarget.trim()} onclick={() => run("join", joinCase)}>Add</button>
+          <span class="muted">Emails and notes move to that case; this reference keeps working. Nothing changes in Outlook.</span>
+        </div>
+      {/if}
+      {#if t.status === "Review" && t.review_reason}<div class="notice err small" style="margin-top:6px"><b>Review:</b> {t.review_reason}</div>{/if}
       {#if copyMsg}<div class="status {copyMsg.kind}">{copyMsg.text}</div>{/if}
       {#if outlookMsg}<div class="status {outlookMsg.kind}">{outlookMsg.text}</div>{/if}
       {#if notFound}
@@ -314,9 +437,38 @@
       {#if failures.length}
         <ul class="small fails">{#each failures as f}<li><b>{f.subject || `Email ${f.message_id}`}</b>: {f.error}</li>{/each}</ul>
       {/if}
-      {#if !isDone}<div class="small muted">Copying the prompt or opening a reply never marks the ticket Done. Mark Done flags this ticket's incoming email(s) complete and moves them to the completion folder.</div>{/if}
-      {#if isDone}<div class="small muted">To assign a Done ticket, Reopen it first.</div>{/if}
+      {#if !isDone}<div class="small muted">Copying the prompt or opening a reply never marks the case Done. Mark Done records your decision at once (no sent-reply check){sharedBound ? "; once the shared database confirms it, the covered incoming emails are flagged complete and moved to the Completed folder (automatically, also if you are offline now)" : " and then flags the case's incoming emails complete and moves them to the completion folder"}. A new reply later moves the case to Review.</div>{/if}
+      {#if isDone && outlookPending}<div class="small muted">Outlook not updated yet for this Done case{sharedBound ? " (it runs automatically after the Done decision is confirmed; Archive in Outlook retries it now)" : ""}.</div>{/if}
+      {#if sharedBound && !isDone}<div class="small muted">Claim / Take over change the owner only. Assign / Reassign also move the emails to the staff folder and send one handoff — the shared database makes sure only one computer does that.</div>{/if}
     </div>
+
+    {#if d.conflicts.length}
+      <div class="panel pad conflicts">
+        <h3>Conflict — review required</h3>
+        <div class="small muted">Someone changed the same thing in the shared database before your change arrived. Your local change was NOT applied there; the shared value is shown in this case. Nothing was lost: both values are kept here until you decide.</div>
+        <table class="grid small" style="margin-top:6px">
+          <thead><tr><th>What</th><th>You saw</th><th>Your change</th><th>Shared value now</th><th></th></tr></thead>
+          <tbody>
+            {#each d.conflicts as c (c.conflict_id)}
+              <tr>
+                <td>{conflictLabel(c)}<div class="muted">{c.reason}</div></td>
+                <td class="pre">{c.original_value ?? "—"}</td>
+                <td class="pre"><b>{c.proposed_value ?? "—"}</b></td>
+                <td class="pre">{c.shared_value ?? "—"}</td>
+                <td style="white-space:nowrap">
+                  {#if c.status === "resolving"}<span class="badge grey">waiting for shared confirmation</span>
+                  {:else}
+                    <button class="small" onclick={() => acceptShared(c)}>Keep shared value</button>
+                    {#if c.conflict_type !== "duplicate_import"}<button class="small" onclick={() => retryConflict(c)} title={c.conflict_type === "owner" ? "Take over explicitly" : c.conflict_type === "stale_done" ? "Mark Done again, covering the new reply" : "Apply your value again against the latest shared value"}>{c.conflict_type === "owner" ? "Take over…" : c.conflict_type === "stale_done" ? "Mark Done again" : "Retry my change"}</button>{/if}
+                  {/if}
+                </td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+        <div class="small muted">To keep your value instead, enter it again above — it is checked against the latest shared value.</div>
+      </div>
+    {/if}
 
     {#if d.assignments.length}
       <div class="panel pad">
@@ -366,6 +518,28 @@
             </table>
           </details>
         {/if}
+      </div>
+    {/if}
+
+    {#if d.outlook_ops.length}
+      <div class="panel pad">
+        <h3>Outlook work (all computers)</h3>
+        <table class="grid small">
+          <thead><tr><th>What</th><th>State</th><th>Emails</th><th>Handoff</th><th>By</th><th>When</th></tr></thead>
+          <tbody>
+            {#each d.outlook_ops as o (o.outlook_op_id)}
+              <tr>
+                <td>{o.kind === "assign" ? "Assignment moves" : "Archiving"}</td>
+                <td><span class="badge {o.state === 'failed' || o.state === 'expired' ? 'err' : o.active ? 'warn' : 'ok'}">{o.active ? `${o.state} (reserved)` : o.state}</span>{#if o.last_error}<div style="color:var(--err)">{o.last_error}</div>{/if}</td>
+                <td>{o.moved_count}/{o.email_count}</td>
+                <td>{o.notify_state && o.notify_state !== "skipped" ? o.notify_state : "—"}</td>
+                <td>{o.staff_name ?? ""}<div class="muted">{o.device_name ?? ""}</div></td>
+                <td style="white-space:nowrap">{fmtDate(o.finished_at ?? o.updated_at)}</td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+        <div class="small muted">Recorded in the shared database. Only the computer holding a reservation moves emails or sends the handoff; a crashed run is released automatically after 20 minutes.</div>
       </div>
     {/if}
 
@@ -425,8 +599,24 @@
       <h3>Staff</h3>
       <div class="field"><div class="lbl">Staff actions already taken</div>
         <div><textarea rows="3" bind:value={actions} placeholder="e.g. Reset the account on 11/17. Only actions recorded here are described as completed in the reply." onblur={() => actions !== (t.staff_actions ?? "") && patch({ staff_actions: actions })}></textarea></div></div>
-      <div class="field"><div class="lbl">Staff notes</div>
-        <div><textarea rows="3" bind:value={notes} onblur={() => notes !== (t.internal_notes ?? "") && patch({ internal_notes: notes })}></textarea></div></div>
+      <div class="field"><div class="lbl">Notes</div>
+        <div class="stack">
+          {#each d.notes as n (n.note_id)}
+            <div class="note">
+              <div class="row small"><b>{n.author_name}</b><span class="muted">{fmtDate(n.created_at)}{n.updated_at !== n.created_at ? ` · edited ${fmtDate(n.updated_at)}` : ""}</span>
+                {#if n.sync_state === "pending"}<span class="badge grey">pending sync</span>{:else if n.sync_state === "conflict"}<span class="badge err">conflict</span>{/if}
+                <span class="grow"></span>
+                <button class="link small" onclick={() => (editNote = { id: n.note_id, body: n.body })}>Edit</button>
+                <button class="link small" onclick={() => deleteNote(n.note_id)}>Delete</button></div>
+              {#if editNote?.id === n.note_id}
+                <textarea rows="3" bind:value={editNote.body}></textarea>
+                <div class="row"><span class="grow"></span><button class="small" onclick={() => (editNote = null)}>Cancel</button><button class="small primary" onclick={saveNoteEdit}>Save note</button></div>
+              {:else}<div class="pre small">{n.body}</div>{/if}
+            </div>
+          {:else}<div class="small muted">No notes yet.</div>{/each}
+          <textarea rows="2" bind:value={newNote} placeholder="Add a note for the team (each note keeps its author; notes from different people never overwrite each other)"></textarea>
+          <div class="row"><span class="grow"></span><button class="small" disabled={!newNote.trim()} onclick={addNote}>Add note</button></div>
+        </div></div>
       {#if t.resolution_notes}
         <div class="field"><div class="lbl">Earlier resolution notes</div><div class="small pre">{t.resolution_notes}</div></div>
       {/if}
@@ -476,6 +666,8 @@
               {#if !m.is_internal && m.entry_id && incoming.length > 1}
                 <button class="small" disabled={!!busy} onclick={() => run("reply", () => openReply(false, m.id))}>Reply to this email</button>
               {/if}
+              {#if m.entry_id}<button class="small" onclick={() => openOriginal(m.id)} title="Show the original email in Outlook (nothing is changed)">Open in Outlook</button>{/if}
+              {#if d.messages.length > 1}<button class="link small" onclick={() => moveEmail(m.id, m.subject)} title="This email belongs to another case">Move to another case…</button>{/if}
               {#if c?.last_error}<span class="small" style="color:var(--err)">{c.last_error}</span>{/if}
             </div>
           {/if}
@@ -486,8 +678,33 @@
     </div>
 
     <div class="panel pad">
-      <button class="link" onclick={() => (showHistory = !showHistory)}>{showHistory ? "▾" : "▸"} History ({d.history.length})</button>
-      {#if showHistory}
+      <h3>Ownership and completion</h3>
+      <div class="small"><b>Owner:</b> {t.assignee_name ?? "nobody"}{#if contributors.length} · <b>Contributors:</b> {contributors.join(", ")}{/if}</div>
+      {#if d.ownership.length}
+        <table class="grid small" style="margin-top:4px"><thead><tr><th>Owner</th><th>From</th><th>Until</th><th>How</th></tr></thead>
+          <tbody>{#each d.ownership as o}<tr><td>{o.staff_name ?? "—"}</td><td>{fmtDate(o.started_at)}</td><td>{o.ended_at ? fmtDate(o.ended_at) : "now"}</td><td>{o.start_reason ?? ""}{o.end_reason ? ` → ${o.end_reason}` : ""}{o.origin === "local" ? " (pending sync)" : ""}</td></tr>{/each}</tbody></table>
+      {/if}
+      {#if d.completions.length}
+        <table class="grid small" style="margin-top:4px"><thead><tr><th>Done decision</th><th>By</th><th>Emails covered</th><th>State</th></tr></thead>
+          <tbody>{#each d.completions as c}<tr><td>{fmtDate(c.decided_at)}</td><td>{c.actor_name ?? "—"}</td><td>{c.covered}</td><td>{c.state}{c.state_reason ? ` — ${c.state_reason}` : ""}</td></tr>{/each}</tbody></table>
+      {/if}
+      {#if d.pending_ops.length}<div class="small muted" style="margin-top:4px">{d.pending_ops.length} change(s) on this computer not yet confirmed by the shared database{d.pending_ops.some((o) => o.state === "held") ? " (some held for review in Settings)" : ""}.</div>{/if}
+    </div>
+
+    <RelatedCases {id} onopen={(n) => onopen?.(n)} onmerge={(src) => (mergeSources = src)} onchanged={() => { load(); onchanged(); }} />
+
+    <div class="panel pad">
+      <div class="row">
+        <button class="link" onclick={() => (showHistory = !showHistory)}>{showHistory ? "▾" : "▸"} Activity ({d.history.length})</button>
+        {#if showHistory}
+          <span class="grow"></span>
+          <button class="link small" class:on={histTab === "timeline"} onclick={() => (histTab = "timeline")}>Timeline</button>
+          <button class="link small" class:on={histTab === "raw"} onclick={() => (histTab = "raw")}>Change log</button>
+        {/if}
+      </div>
+      {#if showHistory && histTab === "timeline"}
+        <Timeline {id} version={tlVersion + d.history.length} />
+      {:else if showHistory}
         <table class="grid small">
           <thead><tr><th>When</th><th>Who</th><th>Action</th><th>Change</th></tr></thead>
           <tbody>
@@ -502,6 +719,10 @@
       {/if}
     </div>
   </div>
+{/if}
+
+{#if mergeSources}
+  <MergeDialog target={id} sources={mergeSources} onclose={() => { mergeSources = null; load(); onchanged(); }} ondone={() => { tlVersion++; }} />
 {/if}
 
 <style>
@@ -521,6 +742,8 @@
   .school:first-of-type { border-top: none; }
   details { margin-top: 8px; }
   .pre { white-space: pre-wrap; }
+  .note { border-left: 3px solid #c9d1db; padding: 2px 8px; }
+  .conflicts { border: 1px solid var(--err); }
   .prompt { white-space: pre-wrap; word-break: break-word; font-family: Consolas, monospace; font-size: 12px; background: #f8fafc; border: 1px solid var(--border); border-radius: 6px; padding: 8px; max-height: 420px; overflow: auto; margin: 0; user-select: text; }
   .msg { border-top: 1px solid var(--border); padding: 6px 0; }
   .msghead { display: flex; gap: 8px; align-items: center; width: 100%; border: none; background: none; padding: 0; height: 26px; text-align: left; }

@@ -36,6 +36,10 @@ impl WorkerConfig {
     /// `resource_dir` is the folder of the app executable (installed or extracted ZIP, any path).
     /// `dev_dir` is the source checkout and is only passed by development (debug) builds.
     pub fn resolve(python_path: &str, resource_dir: Option<&Path>, dev_dir: Option<&Path>) -> AppResult<WorkerConfig> {
+        // development test mode: Outlook is replaced by the file-backed mock; no worker process is started
+        if let crate::profile::OutlookMode::Mock(dir) = crate::profile::outlook_mode() {
+            return Ok(WorkerConfig { program: dir, args: vec!["<mock outlook>".into()] });
+        }
         let candidates_dirs: Vec<PathBuf> = resource_dir
             .map(|r| vec![r.join("outlook_worker"), r.to_path_buf()])
             .unwrap_or_default()
@@ -82,6 +86,12 @@ fn which(exe: &str) -> Option<PathBuf> {
 
 /// Run one worker operation with a timeout.
 pub async fn call(cfg: &WorkerConfig, op: &str, params: Value, timeout: Duration) -> AppResult<WorkerResponse> {
+    if let crate::profile::OutlookMode::Mock(dir) = crate::profile::outlook_mode() {
+        let op2 = op.to_string();
+        let r = tokio::task::spawn_blocking(move || crate::outlook_mock::call(&dir, &op2, &params)).await.map_err(|e| AppError::msg(e.to_string()))?;
+        tracing::info!(op, ok = r.as_ref().map(|x| x.ok).unwrap_or(false), "mock outlook (test mode) answered");
+        return r;
+    }
     let started = std::time::Instant::now();
     let mut cmd = tokio::process::Command::new(&cfg.program);
     cmd.args(&cfg.args)

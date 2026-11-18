@@ -565,7 +565,10 @@ pub fn build_notification(conn: &Connection, op_id: i64) -> AppResult<Notificati
     };
     h.push_str(&block("Handoff instructions", pre(op.note.as_deref())));
     h.push_str(&block("Staff actions already taken", pre(t.staff_actions.as_deref())));
-    h.push_str(&block("Staff notes", pre(t.internal_notes.as_deref())));
+    let note_text = crate::notes::list(conn, op.ticket_id)?.into_iter().map(|n| format!("{} ({})", n.body.trim(), n.author_name)).collect::<Vec<_>>().join("
+
+");
+    h.push_str(&block("Staff notes", pre(Some(note_text.as_str()))));
     let mut msgs = tickets::messages(conn, op.ticket_id)?;
     msgs.sort_by(|a, b| a.received_at.cmp(&b.received_at).then(a.id.cmp(&b.id)));
     let orig_idx = msgs.iter().position(|m| m.link_type == "original" || m.link_type == "manual").or_else(|| msgs.iter().position(|m| !m.is_internal));
@@ -785,6 +788,7 @@ mod tests {
         let pend = pending_moves(&c, op).unwrap();
         apply_moves(&c, op, &sc, &pend, &pend.iter().map(|m| moved(m.message_id, &format!("W{}", m.message_id), "F-WEN", "Inbox/Wenjie")).collect::<Vec<_>>()).unwrap();
         // Mark Done uses the new locations and keeps the owner
+        crate::workflow::mark_done(&c, 1, "Sam").unwrap();
         let items = crate::completion::pending(&c, 1).unwrap();
         assert_eq!(items.len(), 2);
         assert!(items.iter().all(|i| i.entry_id.starts_with('W')));

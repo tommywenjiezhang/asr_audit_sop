@@ -30,6 +30,10 @@ pub struct Staff {
     pub active: bool,
     pub created_at: String,
     pub updated_at: String,
+    /// stable id shared by every computer (UUID)
+    pub shared_id: Option<String>,
+    /// Windows account (DOMAIN\user) used to pre-select this person on their own computer
+    pub windows_account: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -42,9 +46,10 @@ pub struct StaffInput {
     pub store_id: String,
     pub folder_entry_id: String,
     pub folder_path: String,
+    pub windows_account: String,
 }
 
-const COLS: &str = "id,display_name,email,mailbox_name,store_id,folder_entry_id,folder_path,active,created_at,updated_at";
+const COLS: &str = "id,display_name,email,mailbox_name,store_id,folder_entry_id,folder_path,active,created_at,updated_at,shared_id,windows_account";
 
 fn map(r: &rusqlite::Row) -> rusqlite::Result<Staff> {
     Ok(Staff {
@@ -58,6 +63,8 @@ fn map(r: &rusqlite::Row) -> rusqlite::Result<Staff> {
         active: r.get::<_, i64>(7)? != 0,
         created_at: r.get(8)?,
         updated_at: r.get(9)?,
+        shared_id: r.get(10)?,
+        windows_account: r.get(11)?,
     })
 }
 
@@ -91,39 +98,54 @@ pub fn save(conn: &Connection, s: &StaffInput) -> AppResult<Staff> {
     if !valid_email(email) {
         return Err(AppError::coded("INVALID", format!("\"{email}\" is not a valid email address.")));
     }
-    if s.store_id.trim().is_empty() || s.folder_entry_id.trim().is_empty() || s.folder_path.trim().is_empty() {
-        return Err(AppError::coded("INVALID", "Choose the staff member's Outlook folder."));
+    // the Outlook folder is needed for Assign/Reassign only (Claim and the shared views work without it);
+    // a folder is local to this computer's Outlook profile
+    let has_folder = !s.folder_entry_id.trim().is_empty();
+    if has_folder && (s.store_id.trim().is_empty() || s.folder_path.trim().is_empty()) {
+        return Err(AppError::coded("INVALID", "Choose the staff member's Outlook folder again (the folder reference is incomplete)."));
     }
     let me = s.id.unwrap_or(0);
-    let dup_folder: Option<String> = conn
+    let dup_folder: Option<String> = if !has_folder { None } else { conn
         .query_row(
             "SELECT display_name FROM staff WHERE active=1 AND id<>?1 AND folder_entry_id=?2 AND store_id=?3",
             params![me, s.folder_entry_id, s.store_id],
             |r| r.get(0),
         )
-        .optional()?;
+        .optional()? };
     if let Some(other) = dup_folder {
         return Err(AppError::coded("INVALID", format!("{} already uses this folder. Each active staff member needs a separate folder.", other)));
     }
     let ts = now();
+    let tx = conn.unchecked_transaction()?;
+    let before = match s.id {
+        Some(id) => Some(get(&tx, id)?),
+        None => None,
+    };
+    let wa = s.windows_account.trim();
     let id = match s.id {
         Some(id) => {
-            get(conn, id)?;
-            conn.execute(
-                "UPDATE staff SET display_name=?2, email=?3, mailbox_name=NULLIF(?4,''), store_id=?5, folder_entry_id=?6, folder_path=?7, updated_at=?8 WHERE id=?1",
-                params![id, name, email, s.mailbox_name.trim(), s.store_id, s.folder_entry_id, s.folder_path, ts],
+            tx.execute(
+                "UPDATE staff SET display_name=?2, email=?3, mailbox_name=NULLIF(?4,''), store_id=?5, folder_entry_id=?6, folder_path=?7, updated_at=?8, windows_account=NULLIF(?9,'') WHERE id=?1",
+                params![id, name, email, s.mailbox_name.trim(), s.store_id, s.folder_entry_id, s.folder_path, ts, wa],
             )?;
             id
         }
         None => {
-            conn.execute(
-                "INSERT INTO staff(display_name,email,mailbox_name,store_id,folder_entry_id,folder_path,active,created_at,updated_at) VALUES(?1,?2,NULLIF(?3,''),?4,?5,?6,1,?7,?7)",
-                params![name, email, s.mailbox_name.trim(), s.store_id, s.folder_entry_id, s.folder_path, ts],
+            tx.execute(
+                "INSERT INTO staff(display_name,email,mailbox_name,store_id,folder_entry_id,folder_path,active,created_at,updated_at,shared_id,windows_account) VALUES(?1,?2,NULLIF(?3,''),?4,?5,?6,1,?7,?7,?8,NULLIF(?9,''))",
+                params![name, email, s.mailbox_name.trim(), s.store_id, s.folder_entry_id, s.folder_path, ts, crate::shared_apply::new_id(), wa],
             )?;
-            conn.last_insert_rowid()
+            tx.last_insert_rowid()
         }
     };
-    get(conn, id)
+    let after = get(&tx, id)?;
+    // only the shared part (name, email, Windows account, active) is synchronized; folders stay local
+    let shared_changed = before.as_ref().map(|b| b.display_name != after.display_name || b.email != after.email || b.windows_account != after.windows_account).unwrap_or(true);
+    if shared_changed {
+        crate::sync_queue::queue_staff(&tx, id, before.as_ref(), "staff")?;
+    }
+    tx.commit()?;
+    Ok(after)
 }
 
 /// Deactivate (or reactivate). Tickets and history keep pointing at the staff record.
@@ -137,8 +159,23 @@ pub fn set_active(conn: &Connection, id: i64, active: bool) -> AppResult<Staff> 
             return Err(AppError::coded("INVALID", format!("{other} now uses this folder; change one of the folders first.")));
         }
     }
-    conn.execute("UPDATE staff SET active=?2, updated_at=?3 WHERE id=?1", params![id, active as i64, now()])?;
+    let tx = conn.unchecked_transaction()?;
+    tx.execute("UPDATE staff SET active=?2, updated_at=?3 WHERE id=?1", params![id, active as i64, now()])?;
+    if st.active != active {
+        crate::sync_queue::queue_staff(&tx, id, Some(&st), "staff")?;
+    }
+    tx.commit()?;
     get(conn, id)
+}
+
+/// Staff member whose Windows account matches this computer's user (pre-selects "who am I").
+pub fn match_windows_account(conn: &Connection, account: &str) -> AppResult<Option<i64>> {
+    if account.trim().is_empty() {
+        return Ok(None);
+    }
+    Ok(conn
+        .query_row("SELECT id FROM staff WHERE active=1 AND lower(windows_account)=lower(?1) ORDER BY id LIMIT 1", [account.trim()], |r| r.get(0))
+        .optional()?)
 }
 
 /// Staff member who may receive a new assignment.
@@ -178,10 +215,54 @@ pub fn set_current_staff_id(conn: &Connection, id: Option<i64>) -> AppResult<()>
     set_setting(conn, "current_staff_id", &id.map(|i| i.to_string()).unwrap_or_default())
 }
 
+/// Development test mode (ASR_TEST_STAFF): make sure a staff member with this name exists on this computer
+/// and is selected as "I am". Uses a non-routable `example.invalid` address; in mock-Outlook mode a mock
+/// folder with the same name is mapped as the staff folder. Never changes an existing "I am" choice.
+pub fn ensure_test_identity(conn: &Connection, name: &str) -> AppResult<i64> {
+    if let Some(id) = current_staff_id(conn)? {
+        if get(conn, id).is_ok() {
+            return Ok(id);
+        }
+    }
+    let existing: Option<i64> = conn.query_row("SELECT id FROM staff WHERE lower(display_name)=lower(?1) ORDER BY active DESC, id LIMIT 1", [name.trim()], |r| r.get(0)).optional()?;
+    let id = match existing {
+        Some(id) => id,
+        None => {
+            let slug: String = name.chars().filter(|c| c.is_ascii_alphanumeric()).collect::<String>().to_lowercase();
+            let mut input = StaffInput { display_name: name.trim().into(), email: format!("{}@example.invalid", if slug.is_empty() { "test.staff".into() } else { slug }), ..Default::default() };
+            if let crate::profile::OutlookMode::Mock(_) = crate::profile::outlook_mode() {
+                let tree = crate::outlook_mock::default_tree();
+                if let Some(f) = tree["root"]["children"][0]["children"].as_array().and_then(|k| k.iter().find(|f| f["name"].as_str().map(|n| n.eq_ignore_ascii_case(name.trim())).unwrap_or(false))) {
+                    input.store_id = crate::outlook_mock::STORE.into();
+                    input.folder_entry_id = f["entry_id"].as_str().unwrap_or("").into();
+                    input.folder_path = f["path"].as_str().unwrap_or("").into();
+                    input.mailbox_name = "Mock Shared Mailbox".into();
+                }
+            }
+            save(conn, &input)?.id
+        }
+    };
+    set_current_staff_id(conn, Some(id))?;
+    Ok(id)
+}
+
 #[cfg(test)]
 pub mod tests {
     use super::*;
     use crate::db::open_in_memory;
+
+    #[test]
+    fn test_identity_is_created_once_and_never_replaces_a_choice() {
+        let c = open_in_memory().unwrap();
+        let a = ensure_test_identity(&c, "Test Staff A").unwrap();
+        assert_eq!(current_staff_id(&c).unwrap(), Some(a));
+        assert_eq!(get(&c, a).unwrap().email, "teststaffa@example.invalid");
+        assert_eq!(ensure_test_identity(&c, "Test Staff A").unwrap(), a, "idempotent");
+        // an explicit "I am" choice wins over the environment
+        let w = save(&c, &input("Wenjie", "w@example.org", "F-W")).unwrap();
+        set_current_staff_id(&c, Some(w.id)).unwrap();
+        assert_eq!(ensure_test_identity(&c, "Test Staff B").unwrap(), w.id);
+    }
 
     pub fn input(name: &str, email: &str, folder: &str) -> StaffInput {
         StaffInput {
@@ -192,6 +273,7 @@ pub mod tests {
             store_id: "S1".into(),
             folder_entry_id: folder.into(),
             folder_path: format!("Inbox/{name}"),
+            windows_account: String::new(),
         }
     }
 
@@ -211,7 +293,10 @@ pub mod tests {
         let w = save(&c, &input("Wenjie", "wenjie@example.org", "F-WEN")).unwrap();
         let a = save(&c, &input("Aaron", "aaron@example.org", "F-AAR")).unwrap();
         assert!(save(&c, &input("Bad", "not-an-email", "F-X")).is_err());
-        assert!(save(&c, &StaffInput { folder_entry_id: "".into(), ..input("NoFolder", "n@example.org", "") }).is_err());
+        // no Outlook folder: allowed (Claim and the shared views work); Assign needs a folder
+        let nf = save(&c, &StaffInput { folder_entry_id: "".into(), store_id: "".into(), folder_path: "".into(), ..input("NoFolder", "n@example.org", "") }).unwrap();
+        assert!(assignable(&c, nf.id).is_err(), "a staff member without a folder cannot receive an Outlook assignment");
+        assert!(save(&c, &StaffInput { folder_path: "".into(), ..input("Half", "h@example.org", "F-H") }).is_err(), "incomplete folder reference");
         assert!(save(&c, &input("Copy", "copy@example.org", "F-WEN")).is_err(), "folders are separate per active staff member");
         let mut edit = input("Wenjie Z.", "wz@example.org", "F-WEN");
         edit.id = Some(w.id);
@@ -219,8 +304,8 @@ pub mod tests {
         assert_eq!((w2.display_name.as_str(), w2.email.as_str()), ("Wenjie Z.", "wz@example.org"));
         set_active(&c, a.id, false).unwrap();
         assert!(assignable(&c, a.id).is_err(), "no new assignments to inactive staff");
-        assert_eq!(list(&c, false).unwrap().len(), 1);
-        assert_eq!(list(&c, true).unwrap().len(), 2, "inactive staff are kept");
+        assert_eq!(list(&c, false).unwrap().len(), 2, "Wenjie + NoFolder");
+        assert_eq!(list(&c, true).unwrap().len(), 3, "inactive staff are kept");
         assert_eq!(get(&c, a.id).unwrap().display_name, "Aaron");
         set_current_staff_id(&c, Some(w.id)).unwrap();
         assert_eq!(current_staff_id(&c).unwrap(), Some(w.id));

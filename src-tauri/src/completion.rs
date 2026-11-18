@@ -1,10 +1,14 @@
-//! Mark Done: flag the ticket's incoming Outlook emails complete, move them to the configured
-//! completion folder, then mark the ticket Done.
+//! Outlook archiving after Mark Done: flag the incoming emails covered by the Done decision complete and
+//! move them to the configured completion folder.
+//!
+//! Mark Done itself is a staff decision recorded by `workflow::mark_done` (works offline, no sent-reply
+//! verification). Archiving is a separate, retryable Outlook step: if it fails the case stays Done and
+//! shows the Outlook problem. Only emails covered by the latest Done decision are archived, so a reply
+//! that arrived later is never archived under an older decision.
 //!
 //! Outlook and SQLite cannot share a transaction, so progress is stored per message in
 //! `message_completion`. A retry only does what is still missing (no second move of a message that
-//! was already moved), and the ticket becomes Done only when every incoming email is flagged and moved.
-//! Sent replies, drafts and staff emails are never touched. Nothing is ever deleted.
+//! was already moved). Sent replies, drafts and staff emails are never touched. Nothing is ever deleted.
 
 use crate::db::now;
 use crate::error::AppResult;
@@ -27,9 +31,27 @@ pub struct PendingItem {
     pub need_move: bool,
 }
 
-/// Incoming emails of the ticket (original + replies from outside, with an Outlook EntryID)
-/// that are not yet both flagged complete and moved.
+/// Local message ids covered by the latest Done decision (None when the ticket has no decision).
+pub fn covered(conn: &Connection, ticket_id: i64) -> AppResult<Option<Vec<i64>>> {
+    use rusqlite::OptionalExtension;
+    let c: Option<String> = conn
+        .query_row(
+            "SELECT covered_json FROM completion_history WHERE ticket_id=?1 AND state IN ('pending','accepted','legacy') ORDER BY decided_at DESC, id DESC LIMIT 1",
+            [ticket_id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    Ok(c.map(|c| serde_json::from_str(&c).unwrap_or_default()))
+}
+
+/// Incoming emails covered by the latest Done decision (with an Outlook EntryID) that are not yet both
+/// flagged complete and moved. Without a decision: all incoming emails (legacy behaviour, tests).
 pub fn pending(conn: &Connection, ticket_id: i64) -> AppResult<Vec<PendingItem>> {
+    let cov = covered(conn, ticket_id)?;
+    Ok(pending_all(conn, ticket_id)?.into_iter().filter(|p| cov.as_ref().map(|c| c.contains(&p.message_id)).unwrap_or(true)).collect())
+}
+
+fn pending_all(conn: &Connection, ticket_id: i64) -> AppResult<Vec<PendingItem>> {
     let mut st = conn.prepare(
         "SELECT m.id, COALESCE(m.entry_id,''), COALESCE(m.store_id,''), COALESCE(m.internet_message_id,''),
                 COALESCE(m.folder_entry_id,''), COALESCE(m.folder_path,''), COALESCE(m.subject,''),
@@ -172,12 +194,12 @@ pub fn apply_results(conn: &Connection, ticket_id: i64, dest: &FolderRef, reques
     let remaining = pending(&tx, ticket_id)?;
     let done = remaining.is_empty();
     if done {
-        tickets::set_done(&tx, ticket_id, actor, &format!("Marked Done: {} email(s) flagged complete and moved to {}", requested.len(), dest.path))?;
+        history(&tx, ticket_id, actor, "Outlook updated after Mark Done", None, None, Some(&format!("{} email(s) flagged complete and moved to {}", requested.len(), dest.path)))?;
     } else {
-        history(&tx, ticket_id, actor, "Mark Done incomplete - retry needed", None, None,
+        history(&tx, ticket_id, actor, "Outlook update incomplete - retry needed (the case stays Done)", None, None,
             Some(&format!("{} of {} email(s) still need Outlook steps", remaining.len(), requested.len())))?;
-        tx.execute("UPDATE tickets SET updated_at=?2 WHERE id=?1", params![ticket_id, ts])?;
     }
+    tx.execute("UPDATE tickets SET updated_at=?2 WHERE id=?1", params![ticket_id, ts])?;
     crate::scope::recompute_ticket(&tx, ticket_id, actor)?;
     crate::search::reindex(&tx, ticket_id)?;
     tx.commit()?;
@@ -191,7 +213,7 @@ pub fn record_failure(conn: &Connection, ticket_id: i64, items: &[PendingItem], 
     for i in items {
         tx.execute("UPDATE message_completion SET last_error=?2, last_error_at=?3 WHERE message_id=?1", params![i.message_id, error, ts])?;
     }
-    history(&tx, ticket_id, actor, "Mark Done failed - retry needed", None, None, Some(error))?;
+    history(&tx, ticket_id, actor, "Outlook update failed - retry needed (the case stays Done)", None, None, Some(error))?;
     tx.commit()?;
     Ok(())
 }
@@ -225,6 +247,8 @@ mod tests {
     fn success_marks_done_and_records_new_location() {
         let c = conn();
         ingest(&c, &[msg(1, "C1", "Help", "user guide please", "a@b.org")], &Settings::default()).unwrap();
+        crate::workflow::mark_done(&c, 1, "staff").unwrap();
+        assert_eq!(get(&c, 1).unwrap().status, DONE, "Done is the staff decision, before any Outlook step");
         let p = pending(&c, 1).unwrap();
         assert_eq!(p.len(), 1);
         assert!(p[0].need_flag && p[0].need_move);

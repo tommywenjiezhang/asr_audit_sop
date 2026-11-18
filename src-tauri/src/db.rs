@@ -335,6 +335,194 @@ const MIGRATIONS: &[&str] = &[
         PRIMARY KEY (op_id, message_id)
     );
     "#,
+    // v4 - shared team database: stable shared ids, offline operation queue, conflicts, separate notes,
+    //      ownership and completion history, diagnostics. Existing data is kept; nothing is uploaded until
+    //      staff explicitly connect and submit (see sync_queue).
+    r#"
+    ALTER TABLE tickets ADD COLUMN shared_id TEXT;
+    ALTER TABLE tickets ADD COLUMN shared_version INTEGER NOT NULL DEFAULT 0;
+    -- 'local_only' (never submitted) | 'queued' (creation pending) | 'shared' (exists in the shared database)
+    ALTER TABLE tickets ADD COLUMN shared_state TEXT NOT NULL DEFAULT 'local_only';
+    ALTER TABLE tickets ADD COLUMN shared_snapshot TEXT;
+    ALTER TABLE tickets ADD COLUMN shared_refreshed_at TEXT;
+    ALTER TABLE tickets ADD COLUMN review_reason TEXT;
+    ALTER TABLE tickets ADD COLUMN merged_into INTEGER;
+    CREATE UNIQUE INDEX idx_tickets_shared ON tickets(shared_id) WHERE shared_id IS NOT NULL;
+
+    ALTER TABLE staff ADD COLUMN shared_id TEXT;
+    ALTER TABLE staff ADD COLUMN windows_account TEXT;
+    CREATE UNIQUE INDEX idx_staff_shared ON staff(shared_id) WHERE shared_id IS NOT NULL;
+
+    ALTER TABLE email_messages ADD COLUMN match_key TEXT;
+    ALTER TABLE email_messages ADD COLUMN match_method TEXT;
+    ALTER TABLE email_messages ADD COLUMN shared_email_id TEXT;
+    CREATE INDEX idx_messages_match ON email_messages(match_key);
+    CREATE UNIQUE INDEX idx_messages_shared ON email_messages(shared_email_id) WHERE shared_email_id IS NOT NULL;
+
+    ALTER TABLE ticket_history ADD COLUMN op_id TEXT;
+    ALTER TABLE ticket_history ADD COLUMN shared_activity_id TEXT;
+    ALTER TABLE ticket_history ADD COLUMN source TEXT;
+    CREATE UNIQUE INDEX idx_history_shared ON ticket_history(shared_activity_id) WHERE shared_activity_id IS NOT NULL;
+    CREATE INDEX idx_history_op ON ticket_history(op_id);
+
+    CREATE TABLE ticket_notes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        note_id TEXT NOT NULL UNIQUE,
+        ticket_id INTEGER NOT NULL REFERENCES tickets(id),
+        author_staff_id INTEGER,
+        author_name TEXT NOT NULL,
+        body TEXT NOT NULL,
+        version INTEGER NOT NULL DEFAULT 0,
+        deleted INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        -- 'local' | 'shared' | 'legacy' (migrated from the old single notes box)
+        origin TEXT NOT NULL DEFAULT 'local'
+    );
+    CREATE INDEX idx_notes_ticket ON ticket_notes(ticket_id, created_at);
+    INSERT INTO ticket_notes(note_id, ticket_id, author_name, body, created_at, updated_at, origin)
+        SELECT lower(hex(randomblob(4)) || '-' || hex(randomblob(2)) || '-4' || substr(hex(randomblob(2)),2) || '-a' || substr(hex(randomblob(2)),2) || '-' || hex(randomblob(6))),
+               id, 'Earlier staff notes', internal_notes, updated_at, updated_at, 'legacy'
+        FROM tickets WHERE trim(COALESCE(internal_notes,'')) <> '';
+
+    CREATE TABLE ownership_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        entry_id TEXT NOT NULL UNIQUE,
+        ticket_id INTEGER NOT NULL REFERENCES tickets(id),
+        staff_id INTEGER,
+        staff_shared_id TEXT,
+        staff_name TEXT,
+        started_at TEXT NOT NULL,
+        ended_at TEXT,
+        started_by TEXT,
+        ended_by TEXT,
+        start_reason TEXT,
+        end_reason TEXT,
+        origin TEXT NOT NULL DEFAULT 'local'
+    );
+    CREATE INDEX idx_ownership_ticket ON ownership_history(ticket_id, started_at);
+
+    CREATE TABLE completion_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        completion_id TEXT NOT NULL UNIQUE,
+        ticket_id INTEGER NOT NULL REFERENCES tickets(id),
+        actor_name TEXT,
+        actor_staff_id INTEGER,
+        decided_at TEXT NOT NULL,
+        -- local email_messages ids covered by the decision
+        covered_json TEXT NOT NULL DEFAULT '[]',
+        max_covered_received_at TEXT,
+        -- 'pending' | 'accepted' | 'superseded' | 'rejected' | 'legacy'
+        state TEXT NOT NULL,
+        state_reason TEXT,
+        op_id TEXT,
+        origin TEXT NOT NULL DEFAULT 'local'
+    );
+    CREATE INDEX idx_completion_hist_ticket ON completion_history(ticket_id, decided_at);
+
+    CREATE TABLE sync_ops (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        op_id TEXT NOT NULL UNIQUE,
+        ticket_id INTEGER,
+        entity_type TEXT NOT NULL,
+        entity_id TEXT,
+        op_type TEXT NOT NULL,
+        staff_shared_id TEXT,
+        staff_name TEXT NOT NULL,
+        device_id TEXT NOT NULL,
+        windows_account TEXT,
+        base_version INTEGER NOT NULL DEFAULT 0,
+        original_json TEXT NOT NULL DEFAULT '{}',
+        proposed_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        -- held | pending | accepted | conflict | rejected | superseded | isolated
+        state TEXT NOT NULL,
+        target_db_id TEXT,
+        hold_reason TEXT,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        last_attempt_at TEXT,
+        last_error TEXT,
+        result_json TEXT,
+        settled_at TEXT
+    );
+    CREATE INDEX idx_ops_state ON sync_ops(state, id);
+    CREATE INDEX idx_ops_ticket ON sync_ops(ticket_id, state);
+
+    CREATE TABLE sync_conflicts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        conflict_id TEXT NOT NULL UNIQUE,
+        op_id TEXT NOT NULL,
+        ticket_id INTEGER,
+        field_name TEXT,
+        conflict_type TEXT NOT NULL,
+        original_value TEXT,
+        proposed_value TEXT,
+        shared_value TEXT,
+        reason TEXT,
+        -- open | resolving | resolved
+        status TEXT NOT NULL DEFAULT 'open',
+        resolution TEXT,
+        resolve_op_id TEXT,
+        created_at TEXT NOT NULL,
+        resolved_at TEXT
+    );
+    CREATE INDEX idx_conflicts_ticket ON sync_conflicts(ticket_id, status);
+
+    -- developer diagnostics (redacted before writing; bounded); separate from case history
+    CREATE TABLE diag_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        at TEXT NOT NULL,
+        severity TEXT NOT NULL,
+        component TEXT NOT NULL,
+        code TEXT,
+        summary TEXT NOT NULL,
+        detail TEXT,
+        correlation TEXT
+    );
+    "#,
+    // v5 (1.2.0) - Outlook coordination mirror, case links, assignment <-> shared reservation
+    r#"
+    -- read-only mirror of the shared OutlookOperations rows (pending Outlook work indicators, handoff state)
+    CREATE TABLE shared_outlook_ops (
+        outlook_op_id TEXT PRIMARY KEY,
+        ticket_id INTEGER REFERENCES tickets(id),
+        ticket_shared_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        state TEXT NOT NULL,
+        active INTEGER NOT NULL DEFAULT 0,
+        notify_state TEXT,
+        from_staff_shared_id TEXT,
+        to_staff_shared_id TEXT,
+        device_id TEXT,
+        device_name TEXT,
+        staff_name TEXT,
+        email_count INTEGER NOT NULL DEFAULT 0,
+        moved_count INTEGER NOT NULL DEFAULT 0,
+        last_error TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        expires_at TEXT,
+        finished_at TEXT
+    );
+    CREATE INDEX idx_outlook_ops_ticket ON shared_outlook_ops(ticket_id, active);
+
+    -- links between cases (related / possible duplicate), keyed by the stable shared ids of both cases
+    CREATE TABLE ticket_relations (
+        relation_id TEXT PRIMARY KEY,
+        ticket_a TEXT NOT NULL,
+        ticket_b TEXT NOT NULL,
+        relation_type TEXT NOT NULL,
+        status TEXT NOT NULL,
+        evidence TEXT,
+        created_at TEXT NOT NULL,
+        origin TEXT NOT NULL DEFAULT 'shared'
+    );
+    CREATE INDEX idx_relations_a ON ticket_relations(ticket_a);
+    CREATE INDEX idx_relations_b ON ticket_relations(ticket_b);
+
+    ALTER TABLE assignment_ops ADD COLUMN shared_op_id TEXT;
+    ALTER TABLE assignment_ops ADD COLUMN archive INTEGER NOT NULL DEFAULT 0;
+    "#,
 ];
 
 /// Open (and migrate) the database file. Before applying migrations to an existing database,
@@ -398,6 +586,8 @@ pub fn after_migrate(conn: &Connection) -> AppResult<()> {
         set_setting(&tx, "v3_scope_init", &now())?;
         tx.commit()?;
     }
+    // v4 follow-up (repeatable): stable shared ids, ownership/completion history from earlier data
+    crate::sync_queue::backfill_v4(conn)?;
     Ok(())
 }
 
@@ -534,6 +724,71 @@ mod tests {
         let c = open(&path).unwrap(); // repeatable / resumable
         let refs: i64 = c.query_row("SELECT COUNT(DISTINCT ticket_ref) FROM tickets", [], |r| r.get(0)).unwrap();
         assert_eq!(refs, 2);
+    }
+
+    #[test]
+    fn v4_database_migrates_to_v5_keeping_everything() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("support_desk.db");
+        {
+            let c = Connection::open(&path).unwrap();
+            for m in &MIGRATIONS[..4] {
+                c.execute_batch(m).unwrap();
+            }
+            c.execute_batch("PRAGMA user_version=4").unwrap();
+            c.execute("INSERT INTO issue_definitions(id,name,fields_json,keywords_json,catalog_version) VALUES('other','Other','[]','[]',1)", []).unwrap();
+            c.execute("INSERT INTO tickets(status,issue_type,created_at,updated_at,ticket_ref,scope_state,shared_id,shared_state) VALUES('Assigned','other','x','x','ASR-1','current','s-1','shared')", []).unwrap();
+            c.execute("INSERT INTO assignment_ops(ticket_id,to_staff_id,operator,created_at,state,dest_store_id,dest_folder_entry_id,dest_path) VALUES(1,1,'Sam','x','done','S','F','Inbox/A')", []).unwrap();
+        }
+        let c = open(&path).unwrap();
+        assert_eq!(schema_version(&c).unwrap(), 5);
+        assert!(std::fs::read_dir(dir.path().join("backups")).unwrap().any(|e| e.unwrap().file_name().to_string_lossy().starts_with("pre-migration-v4-")), "backup before upgrade");
+        let g = |sql: &str| c.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap();
+        assert_eq!(g("SELECT COUNT(*) FROM tickets WHERE shared_id='s-1' AND status='Assigned'"), 1);
+        assert_eq!(g("SELECT COUNT(*) FROM assignment_ops WHERE shared_op_id IS NULL AND archive=0"), 1, "existing assignments kept");
+        assert_eq!(g("SELECT COUNT(*) FROM shared_outlook_ops"), 0);
+        assert_eq!(g("SELECT COUNT(*) FROM ticket_relations"), 0);
+    }
+
+    #[test]
+    fn v3_database_migrates_to_v4_shared_foundation_without_uploading_anything() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("support_desk.db");
+        {
+            let c = Connection::open(&path).unwrap();
+            for m in &MIGRATIONS[..3] {
+                c.execute_batch(m).unwrap();
+            }
+            c.execute_batch("PRAGMA user_version=3").unwrap();
+            c.execute("INSERT INTO issue_definitions(id,name,fields_json,keywords_json,catalog_version) VALUES('other','Other','[]','[]',1)", []).unwrap();
+            c.execute("INSERT INTO staff(display_name,email,store_id,folder_entry_id,folder_path,created_at,updated_at) VALUES('Aaron','aaron@x.org','S','F-A','Inbox/Aaron','x','x')", []).unwrap();
+            c.execute("INSERT INTO tickets(status,issue_type,created_at,updated_at,internal_notes,assignee_staff_id,assigned_at,ticket_ref,scope_state) VALUES('In Progress','other','2026-11-01T10:00:00Z','2026-11-02T10:00:00Z','Called twice',1,'2026-11-01T11:00:00Z','ASR-00000001','current')", []).unwrap();
+            c.execute("INSERT INTO tickets(status,issue_type,created_at,updated_at,completed_at,ticket_ref,scope_state) VALUES('Done','other','2026-11-01T10:00:00Z','2026-11-03T10:00:00Z','2026-11-03T10:00:00Z','ASR-00000002','history')", []).unwrap();
+            c.execute("INSERT INTO email_messages(entry_id,internet_message_id,subject,received_at,body_text,imported_at) VALUES('E1','<a@x>','s','2026-11-01T09:00:00Z','b','x')", []).unwrap();
+            c.execute("INSERT INTO ticket_email_links(ticket_id,message_id,link_type,linked_at) VALUES(2,1,'original','x')", []).unwrap();
+            c.execute("INSERT INTO assignment_ops(ticket_id,to_staff_id,operator,created_at,state,dest_store_id,dest_folder_entry_id,dest_path,finished_at) VALUES(1,1,'Sam','2026-11-01T11:00:00Z','done','S','F-A','Inbox/Aaron','2026-11-01T11:00:05Z')", []).unwrap();
+        }
+        let c = open(&path).unwrap();
+        assert_eq!(schema_version(&c).unwrap() as usize, MIGRATIONS.len());
+        assert!(std::fs::read_dir(dir.path().join("backups")).unwrap().any(|e| e.unwrap().file_name().to_string_lossy().starts_with("pre-migration-v3-")), "backup before upgrade");
+        let g = |sql: &str| c.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap();
+        assert_eq!(g("SELECT COUNT(*) FROM tickets WHERE shared_id IS NOT NULL"), 2, "stable shared ids");
+        assert_eq!(g("SELECT COUNT(DISTINCT shared_id) FROM tickets"), 2);
+        assert_eq!(g("SELECT COUNT(*) FROM staff WHERE shared_id IS NOT NULL"), 1);
+        assert_eq!(g("SELECT COUNT(*) FROM tickets WHERE shared_state='local_only'"), 2, "existing cases are not uploaded automatically");
+        assert_eq!(g("SELECT COUNT(*) FROM sync_ops"), 0, "migration queues nothing");
+        assert_eq!(g("SELECT COUNT(*) FROM ticket_notes WHERE body='Called twice' AND origin='legacy'"), 1, "single notes box becomes a note");
+        assert_eq!(g("SELECT COUNT(*) FROM tickets WHERE internal_notes='Called twice'"), 1, "legacy column kept");
+        assert_eq!(g("SELECT COUNT(*) FROM ownership_history WHERE ticket_id=1 AND staff_id=1 AND ended_at IS NULL"), 1, "current owner period");
+        assert_eq!(g("SELECT COUNT(*) FROM completion_history WHERE ticket_id=2 AND state='legacy' AND json_array_length(covered_json)=1"), 1, "Done keeps its completion with covered emails");
+        assert_eq!(g("SELECT COUNT(*) FROM tickets WHERE status IN ('In Progress','Done')"), 2, "statuses unchanged");
+        drop(c);
+        // repeatable: opening again adds nothing
+        let c = open(&path).unwrap();
+        let g = |sql: &str| c.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap();
+        assert_eq!(g("SELECT COUNT(*) FROM ownership_history"), 1);
+        assert_eq!(g("SELECT COUNT(*) FROM completion_history"), 1);
+        assert_eq!(g("SELECT COUNT(*) FROM ticket_notes"), 1);
     }
 
     #[test]

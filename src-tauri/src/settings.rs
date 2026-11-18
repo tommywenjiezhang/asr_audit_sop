@@ -23,6 +23,9 @@ pub struct Settings {
     pub selected_subfolders: Vec<FolderRef>,
     /// EntryIDs of selected subfolders whose own child folders are scanned too ("selected" mode).
     pub selected_with_children: Vec<String>,
+    /// Folders (with their subtrees) never scanned even when a parent is scanned with its subfolders,
+    /// e.g. "Inbox/NJIIS Team/Completed". Absent in settings files written before 1.2.1 (= none).
+    pub excluded_folders: Vec<FolderRef>,
     pub sync_enabled: bool,
     pub interval_minutes: u32,
     pub check_on_startup: bool,
@@ -51,6 +54,13 @@ pub struct Settings {
     /// Outlook account (SMTP address) used to send assignment notifications; blank = Outlook's default
     /// account. Must be an account the current user may send from (no shared-mailbox Send As is assumed).
     pub notify_account: String,
+    /// "shared" (save locally, synchronize with the shared Access database when reachable) |
+    /// "standalone" (everything stays on this computer; nothing is uploaded until an explicit import)
+    pub shared_mode: String,
+    /// Path of the shared Access database (.accdb). Per workstation; never created automatically.
+    pub shared_db_path: String,
+    /// Minutes between background synchronizations (local changes also trigger one after a few seconds).
+    pub shared_sync_minutes: u32,
 }
 
 pub const DEFAULT_PROMPT_INSTRUCTIONS: &str = "Please draft a concise, professional NJIIS Help Desk reply to the email below.
@@ -72,6 +82,7 @@ impl Default for Settings {
             subfolder_mode: "none".into(),
             selected_subfolders: vec![],
             selected_with_children: vec![],
+            excluded_folders: vec![],
             sync_enabled: false,
             interval_minutes: 5,
             check_on_startup: true,
@@ -94,11 +105,45 @@ impl Default for Settings {
             archive_mailbox_name: String::new(),
             prompt_instructions: DEFAULT_PROMPT_INSTRUCTIONS.into(),
             notify_account: String::new(),
+            shared_mode: "shared".into(),
+            shared_db_path: crate::shared_store::DEFAULT_SHARED_PATH.into(),
+            shared_sync_minutes: 2,
         }
     }
 }
 
+/// True if `path` lies strictly below `parent` ("Inbox/Wenjie/X" is below "Inbox/Wenjie"; "Inbox/Wenjie2" is not).
+pub fn is_below(path: &str, parent: &str) -> bool {
+    path.len() > parent.len() + 1 && path.starts_with(parent) && path.as_bytes()[parent.len()] == b'/'
+}
+
 pub const ALLOWED_INTERVALS: &[u32] = &[1, 5, 10, 15, 30];
+
+/// Shared database settings rules: an Access file (.accdb/.mdb), never inside a OneDrive-synchronized
+/// folder (OneDrive copies a live Access file while it is in use and can corrupt or fork it).
+pub fn validate_shared(mode: &str, path: &str) -> AppResult<()> {
+    if mode != "shared" && mode != "standalone" {
+        return Err(AppError::coded("INVALID", "Shared database mode must be Shared or Standalone"));
+    }
+    let p = path.trim();
+    if p.is_empty() {
+        if mode == "shared" {
+            return Err(AppError::coded("INVALID", "Enter the shared database path, or choose Standalone mode."));
+        }
+        return Ok(());
+    }
+    let lower = p.to_lowercase();
+    if !(lower.ends_with(".accdb") || lower.ends_with(".mdb")) {
+        return Err(AppError::coded("INVALID", "The shared database must be a Microsoft Access file (.accdb)."));
+    }
+    if lower.contains("\\onedrive") || lower.contains("\\onedrive -") || lower.contains("/onedrive") || lower.split(['\\', '/']).any(|seg| seg.starts_with("onedrive")) {
+        return Err(AppError::coded("INVALID", "Do not use a OneDrive-synchronized folder for the live shared database. Use the network share."));
+    }
+    if p.contains(['|', '<', '>', '"', '\n']) {
+        return Err(AppError::coded("INVALID", "The path contains characters that are not allowed."));
+    }
+    Ok(())
+}
 
 impl Settings {
     pub fn validate(&self) -> AppResult<()> {
@@ -129,8 +174,17 @@ impl Settings {
                 return Err(AppError::coded("INVALID", "The completion folder cannot be a monitored folder. Choose a different folder."));
             }
         }
+        if let Some(f) = &self.folder {
+            if self.excluded_folders.iter().any(|x| x.entry_id == f.entry_id) {
+                return Err(AppError::coded("INVALID", "The monitored folder itself cannot be excluded."));
+            }
+        }
         if self.prompt_instructions.len() > 20_000 {
             return Err(AppError::coded("INVALID", "Prompt instructions are too long"));
+        }
+        validate_shared(&self.shared_mode, &self.shared_db_path)?;
+        if self.shared_sync_minutes == 0 || self.shared_sync_minutes > 60 {
+            return Err(AppError::coded("INVALID", "Shared database sync interval must be 1-60 minutes"));
         }
         Ok(())
     }
@@ -142,7 +196,8 @@ impl Settings {
 
     pub fn load(path: &Path) -> Settings {
         match std::fs::read_to_string(path) {
-            Ok(s) => serde_json::from_str(&s).unwrap_or_else(|e| {
+            // a UTF-8 byte-order mark (Notepad, PowerShell) is not part of the JSON
+            Ok(s) => serde_json::from_str(s.trim_start_matches('\u{feff}')).unwrap_or_else(|e| {
                 tracing::warn!(error = %e, "settings.json unreadable; using defaults");
                 Settings::default()
             }),
@@ -150,12 +205,36 @@ impl Settings {
         }
     }
 
-    /// Drop "with children" marks for folders that are no longer selected.
+    /// Drop "with children" marks for folders that are no longer selected, selections that are already
+    /// covered by a selected parent scanned with its subfolders (no folder is scanned twice), duplicate
+    /// entries, and exclusions of the monitored folder itself.
     pub fn normalized(mut self) -> Settings {
+        let mut seen = std::collections::HashSet::new();
+        self.selected_subfolders.retain(|f| seen.insert(f.entry_id.clone()));
+        if let Some(main) = &self.folder {
+            let main_id = main.entry_id.clone();
+            self.selected_subfolders.retain(|f| f.entry_id != main_id);
+            self.excluded_folders.retain(|f| f.entry_id != main_id);
+        }
         let sel: Vec<String> = self.selected_subfolders.iter().map(|f| f.entry_id.clone()).collect();
         self.selected_with_children.retain(|id| sel.contains(id));
+        self.selected_with_children.sort();
         self.selected_with_children.dedup();
+        let covering: Vec<FolderRef> =
+            self.selected_subfolders.iter().filter(|f| self.selected_with_children.contains(&f.entry_id)).cloned().collect();
+        self.selected_subfolders.retain(|f| !covering.iter().any(|c| c.store_id == f.store_id && is_below(&f.path, &c.path)));
+        let mut seen_x = std::collections::HashSet::new();
+        self.excluded_folders.retain(|f| seen_x.insert(f.entry_id.clone()));
         self
+    }
+
+    /// EntryIDs whose subtrees are never scanned: explicit exclusions plus the Mark Done completion folder.
+    pub fn excluded_ids(&self) -> Vec<String> {
+        let mut v: Vec<String> = self.excluded_folders.iter().map(|f| f.entry_id.clone()).collect();
+        v.extend(self.archive_folder.iter().map(|a| a.entry_id.clone()));
+        v.sort();
+        v.dedup();
+        v
     }
 
     /// Plain-language description of what a scan reads.
@@ -168,7 +247,12 @@ impl Settings {
             .iter()
             .map(|(m, subs)| if *subs { format!("{} and all its subfolders", m.path) } else { format!("{} (this folder only)", m.path) })
             .collect();
-        parts.join(" + ")
+        let mut out = parts.join(" + ");
+        if !self.excluded_folders.is_empty() && self.monitored().iter().any(|(_, subs)| *subs) {
+            let x: Vec<&str> = self.excluded_folders.iter().map(|f| f.path.as_str()).collect();
+            out.push_str(&format!(", except {}", x.join(", ")));
+        }
+        out
     }
 
     pub fn save(&self, path: &Path) -> AppResult<()> {
@@ -211,6 +295,15 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settings_with_byte_order_mark_load() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("settings.json");
+        std::fs::write(&p, "\u{feff}{\"staff_name\": \"Test Staff A\", \"shared_sync_minutes\": 1}").unwrap();
+        let s = Settings::load(&p);
+        assert_eq!((s.staff_name.as_str(), s.shared_sync_minutes), ("Test Staff A", 1));
+    }
     #[test]
     fn roundtrip_and_validation() {
         let dir = tempfile::tempdir().unwrap();
@@ -268,5 +361,42 @@ mod tests {
         let p = dir.path().join("settings.json");
         std::fs::write(&p, r#"{"subfolder_mode":"selected"}"#).unwrap();
         assert!(Settings::load(&p).selected_with_children.is_empty());
+    }
+
+    #[test]
+    fn overlapping_selections_and_exclusions_are_normalized() {
+        let f = |id: &str, p: &str| FolderRef { store_id: "S".into(), entry_id: id.into(), path: p.into() };
+        let mut s = Settings::default();
+        s.folder = Some(f("INBOX", "Inbox"));
+        s.subfolder_mode = "selected".into();
+        s.selected_subfolders = vec![f("WEN", "Inbox/Wenjie"), f("NT", "Inbox/Wenjie/Needs Training"), f("WEN", "Inbox/Wenjie"),
+            f("WEN2", "Inbox/Wenjie2"), f("INBOX", "Inbox")];
+        s.selected_with_children = vec!["WEN".into(), "WEN".into()];
+        s.excluded_folders = vec![f("DONE", "Inbox/Wenjie/Completed"), f("DONE", "Inbox/Wenjie/Completed"), f("INBOX", "Inbox")];
+        let n = s.normalized();
+        let ids: Vec<&str> = n.selected_subfolders.iter().map(|x| x.entry_id.as_str()).collect();
+        assert_eq!(ids, vec!["WEN", "WEN2"], "covered child, duplicate and the main folder removed; sibling with a common prefix kept");
+        assert_eq!(n.selected_with_children, vec!["WEN".to_string()]);
+        assert_eq!(n.excluded_folders.len(), 1);
+        assert!(n.validate().is_ok());
+        let mut a = n.clone();
+        a.archive_folder = Some(f("ARCH", "Inbox/Archive"));
+        assert_eq!(a.excluded_ids(), vec!["ARCH".to_string(), "DONE".to_string()]);
+        assert!(a.scan_summary().ends_with(", except Inbox/Wenjie/Completed"), "{}", a.scan_summary());
+        let mut bad = n.clone();
+        bad.excluded_folders.push(f("INBOX", "Inbox"));
+        assert!(bad.validate().is_err(), "the monitored folder itself cannot be excluded");
+        assert!(is_below("Inbox/Wenjie/X", "Inbox/Wenjie") && !is_below("Inbox/Wenjie2", "Inbox/Wenjie") && !is_below("Inbox/Wenjie", "Inbox/Wenjie"));
+    }
+
+    #[test]
+    fn settings_written_before_exclusions_still_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("settings.json");
+        std::fs::write(&p, r#"{"subfolder_mode":"all","folder":{"store_id":"S","entry_id":"INBOX","path":"Inbox"},"shared_sync_minutes":2}"#).unwrap();
+        let s = Settings::load(&p);
+        assert_eq!(s.subfolder_mode, "all");
+        assert!(s.excluded_folders.is_empty());
+        assert_eq!(s.folder.unwrap().entry_id, "INBOX");
     }
 }

@@ -8,7 +8,7 @@
 use crate::error::AppResult;
 use crate::settings::Settings;
 use crate::staff;
-use crate::tickets::{ASSIGNED, DONE, IN_PROGRESS, UNASSIGNED};
+use crate::tickets::{ASSIGNED, DONE, IN_PROGRESS, REVIEW, UNASSIGNED};
 use rusqlite::{params, Connection};
 use serde::Serialize;
 
@@ -23,6 +23,7 @@ pub struct OverviewRow {
     pub unassigned: i64,
     pub assigned: i64,
     pub in_progress: i64,
+    pub review: i64,
     pub done: i64,
 }
 
@@ -73,6 +74,7 @@ pub fn overview(conn: &Connection, s: &Settings, done_from: &str, done_to: &str)
         unassigned: count(None, UNASSIGNED, true)?,
         assigned: 0,
         in_progress: count(None, IN_PROGRESS, true)?,
+        review: count(None, REVIEW, true)?,
         done: count(None, DONE, false)?,
     });
     let mut notes = Vec::new();
@@ -91,9 +93,10 @@ pub fn overview(conn: &Connection, s: &Settings, done_from: &str, done_to: &str)
             unassigned: 0,
             assigned: count(Some(st.id), ASSIGNED, true)?,
             in_progress: count(Some(st.id), IN_PROGRESS, true)?,
+            review: count(Some(st.id), REVIEW, true)?,
             done: count(Some(st.id), DONE, false)?,
         };
-        if st.active || row.assigned + row.in_progress + row.done > 0 {
+        if st.active || row.assigned + row.in_progress + row.review + row.done > 0 {
             rows.push(row);
         }
     }

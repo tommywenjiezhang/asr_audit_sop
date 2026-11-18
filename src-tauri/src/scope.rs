@@ -26,7 +26,7 @@ pub struct ScopeCfg {
     pub key: String,
     /// (store_id, folder EntryID, include subfolders)
     pub folders: Vec<(String, String, bool)>,
-    /// excluded subtrees (the Mark Done completion folder)
+    /// excluded subtrees (the Mark Done completion folder and folders excluded in Settings)
     pub exclude: Vec<String>,
     pub archive: Option<String>,
 }
@@ -42,7 +42,7 @@ pub fn fnv64(s: &str) -> u64 {
 
 pub fn cfg(s: &Settings) -> ScopeCfg {
     let folders: Vec<(String, String, bool)> = s.monitored().into_iter().map(|(f, subs)| (f.store_id, f.entry_id, subs)).collect();
-    let exclude: Vec<String> = s.archive_folder.iter().map(|a| a.entry_id.clone()).collect();
+    let exclude: Vec<String> = s.excluded_ids();
     let mut sig = String::new();
     for (st, e, subs) in &folders {
         sig.push_str(&format!("{st}|{e}|{subs};"));
@@ -353,7 +353,11 @@ pub fn recompute_ticket(conn: &Connection, id: i64, actor: &str) -> AppResult<()
             history(conn, id, actor, "Ownership conflict: emails are in more than one staff folder", None, None, Some(&names.join(", ")))?;
         }
     }
-    if !conflict && owners.len() == 1 {
+    // Once this computer uses a shared database, ownership comes only from explicit actions accepted there
+    // (Claim / Take over / Assign). A folder observation never changes the owner silently and never
+    // invents an actor; it stays visible on each email ("in X's folder").
+    let shared_owner = crate::sync_queue::mode(conn) == crate::sync_queue::MODE_SHARED && crate::sync_queue::bound_db(conn).is_some();
+    if !conflict && owners.len() == 1 && !shared_owner {
         let owner = *owners.iter().next().unwrap();
         if Some(owner) != assignee {
             let new_status = if status == tickets::UNASSIGNED { tickets::ASSIGNED } else { status.as_str() };

@@ -1,18 +1,28 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
-  import { api, errMsg, fmtDate, type SyncStatus } from "./lib/api";
-  import { app, loadCatalog, toast } from "./lib/stores.svelte";
+  import { api, errMsg, fmtDate, type ProfileInfo, type SharedStatus, type SyncStatus } from "./lib/api";
+  import { app, loadCatalog, sharedLabel, toast } from "./lib/stores.svelte";
   import Tickets from "./pages/Tickets.svelte";
   import Templates from "./pages/Templates.svelte";
   import Reports from "./pages/Reports.svelte";
   import Overview from "./pages/Overview.svelte";
   import SettingsPage from "./pages/Settings.svelte";
+  import Diagnostics from "./pages/Diagnostics.svelte";
+  import Kanban from "./pages/Kanban.svelte";
+  import Conflicts from "./pages/Conflicts.svelte";
 
-  type Page = "tickets" | "overview" | "templates" | "reports" | "settings";
+  type Page = "tickets" | "kanban" | "conflicts" | "overview" | "templates" | "reports" | "settings" | "diagnostics";
   let page = $state<Page>("tickets");
+  let openId = $state<number | null>(null);
+  let profile = $state<ProfileInfo | null>(null);
+  function openTicket(id: number) {
+    openId = id;
+    page = "tickets";
+  }
   let ready = $state(false);
   let loadError = $state("");
+  const sl = $derived(sharedLabel(app.shared));
 
   onMount(() => {
     const unsubs: (() => void)[] = [];
@@ -20,12 +30,15 @@
       try {
         await loadCatalog();
         app.sync = await api.syncStatus();
+        app.shared = await api.sharedStatus();
+        profile = await api.profileInfo().catch(() => null);
         ready = true;
       } catch (e) {
         loadError = errMsg(e);
       }
       unsubs.push(await listen<SyncStatus>("sync-status", (ev) => (app.sync = { ...app.sync, ...ev.payload })));
       unsubs.push(await listen("tickets-changed", () => app.ticketsVersion++));
+      unsubs.push(await listen<SharedStatus>("shared-status", (ev) => (app.shared = ev.payload)));
     })();
     return () => unsubs.forEach((u) => u());
   });
@@ -48,16 +61,21 @@
   <nav class="side">
     <div class="brand">ASR/Audit<br /><span>Support Desk</span></div>
     <button class="nav" class:active={page === "tickets"} onclick={() => (page = "tickets")}>Tickets</button>
+    <button class="nav" class:active={page === "kanban"} onclick={() => (page = "kanban")} title="Board of the team's cases by status; drag to change status">Kanban</button>
+    <button class="nav" class:active={page === "conflicts"} onclick={() => (page = "conflicts")} title="Synchronization conflicts to review">Conflicts{#if (app.shared?.queue.conflicts ?? 0) > 0} <span class="cnt">{app.shared?.queue.conflicts}</span>{/if}</button>
     <button class="nav" class:active={page === "templates"} onclick={() => (page = "templates")} title="Approved SOP wording used in the Copilot prompt">SOP Templates</button>
     <button class="nav" class:active={page === "overview"} onclick={() => (page = "overview")}>Team Overview</button>
     <button class="nav" class:active={page === "reports"} onclick={() => (page = "reports")}>Reports</button>
     <button class="nav" class:active={page === "settings"} onclick={() => (page = "settings")}>Settings</button>
+    <button class="nav" class:active={page === "diagnostics"} onclick={() => (page = "diagnostics")} title="Technical events and copyable log for troubleshooting">Diagnostics</button>
     <div class="grow"></div>
+    {#if profile?.test_mode}<div class="testmode small" title={profile.data_dir}>TEST MODE · {profile.name || "profile"}<br />Outlook: {profile.outlook === "mock" ? "mock (no real changes)" : "LIVE"}</div>{/if}
     <div class="syncbox small">
       <div><b>Folder:</b> {app.sync?.folder_display ?? "not selected"}</div>
       <div><b>Last check:</b> {fmtDate(app.sync?.last_success_at) || "never"}</div>
       {#if app.sync?.next_run_at}<div><b>Next:</b> {fmtDate(app.sync.next_run_at)}</div>{/if}
       {#if app.sync?.last_error}<div class="errline" title={app.sync.last_error}>⚠ {app.sync.last_error}</div>{/if}
+      <button class="sharedline {sl.kind}" title={app.shared?.error_message ?? "Shared database status — open Settings"} onclick={() => (page = "settings")}>{sl.text}</button>
       <button class="primary" style="width:100%;margin-top:6px" disabled={app.sync?.running} onclick={checkNow}>
         {app.sync?.running ? "Checking…" : "Check Now"}
       </button>
@@ -70,15 +88,21 @@
     {:else if !ready}
       <div class="muted" style="padding:16px">Loading…</div>
     {:else if page === "tickets"}
-      <Tickets />
+      <Tickets {openId} />
+    {:else if page === "kanban"}
+      <Kanban />
+    {:else if page === "conflicts"}
+      <Conflicts />
     {:else if page === "templates"}
       <Templates />
     {:else if page === "overview"}
-      <Overview />
+      <Overview onopenticket={openTicket} />
     {:else if page === "reports"}
       <Reports />
+    {:else if page === "diagnostics"}
+      <Diagnostics />
     {:else}
-      <SettingsPage />
+      <SettingsPage onopendiagnostics={() => (page = "diagnostics")} />
     {/if}
   </main>
 
@@ -98,8 +122,12 @@
   .side button:hover { background: #24476b; }
   .side button.primary { background: #3a77b5; color: #fff; text-align: center; }
   .grow { flex: 1; }
+  .testmode { background: #7a4b00; color: #fff3d6; border-radius: 6px; padding: 6px 8px; margin-bottom: 6px; font-weight: 600; }
+  .cnt { background: #b3261e; color: #fff; border-radius: 8px; padding: 0 6px; font-size: 11px; }
   .syncbox { background: #0f2539; border-radius: 6px; padding: 8px; line-height: 1.5; word-break: break-word; }
   .errline { color: #ffb4ab; max-height: 60px; overflow: hidden; }
+  .side button.sharedline { height: auto; padding: 3px 4px; margin-top: 4px; font-size: 11px; line-height: 1.3; width: 100%; white-space: normal; }
+  .sharedline.ok { color: #9fe0b5; } .sharedline.warn { color: #ffd38a; } .sharedline.err { color: #ffb4ab; } .sharedline.grey { color: #a9c1d9; }
   main { flex: 1; min-width: 0; height: 100%; overflow: hidden; }
   .toast { position: fixed; right: 16px; bottom: 16px; max-width: 460px; padding: 10px 12px; border-radius: 6px; background: #17324d; color: #fff; box-shadow: 0 4px 14px rgba(0,0,0,.25); z-index: 60; display: flex; gap: 8px; align-items: start; }
   .toast.ok { background: #245e3c; } .toast.error { background: #8c1d18; }

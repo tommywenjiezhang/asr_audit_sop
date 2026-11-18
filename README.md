@@ -3,21 +3,30 @@
 A lightweight Windows desktop app for the ASR/Audit support mailbox. It:
 
 - checks an Outlook folder (manually or on a schedule) using your classic Outlook profile, including shared mailboxes
-- turns emails into tickets with workflow statuses **Unassigned / Assigned / In Progress / Done** and a separate **assignee**
+- turns emails into **support cases** (one case can hold several schools, issue types and emails) with workflow statuses **Unassigned / Assigned / In Progress / Review / Done** and one current **owner**
+- shares cases, owners, notes and history between computers through a **shared Microsoft Access database** on a network share, while always saving locally first (works offline; see [docs/SHARED_DATABASE.md](docs/SHARED_DATABASE.md))
+- **Claim / Take over** change ownership without touching Outlook; **Mark Done** is a recorded staff decision (no sent-reply verification); a new reply to a Done case moves it to **Review**
+- **Kanban board**, **bulk actions** with per-case results, **Team Overview** (workload, aging, pending Outlook work, conflicts, staff activity), **Conflicts** review page
+- **Related cases** suggestions and links, **Combine cases** with a preview, **move an email to another case**, a complete **activity timeline**
+- **Diagnostics** with a copyable/exportable, redacted event log, connection tests, shared integrity check and verified backups
 - assigns tickets to staff: moves the ticket's emails into the person's Outlook folder and emails them a handoff summary
 - shows **Current Tickets** (emails now in the selected folders), **Awaiting Verification** and **Ticket History**, verified against Outlook on every check
 - extracts issue types (several per email), error messages, school details (several schools per email, with NJIIS and other IDs, address, municipality, county and ZIP) and sender details (title, phone, extension)
 - builds **one plain-text Copilot prompt** per ticket from the saved data, the approved SOP wording and the original email
 
-**Workflow:** Scan → (Assign) → Review ticket → **Copy Prompt** → paste into Microsoft Copilot → **Open Outlook Reply** → paste Copilot's reply and send it yourself → **Mark Done**, which flags the email(s) complete and moves them to the completion folder.
+**Workflow:** Scan → **Claim** → Review case → **Copy Prompt** → paste into Microsoft Copilot → **Open Outlook Reply** → paste Copilot's reply and send it yourself → **Mark Done** (decision saved at once) → Outlook archiving of the covered emails (immediately on a standalone computer; with the shared database as soon as it confirms the decision — automatically, also after working offline).
 
 What the app does in Outlook:
 
 - **Scanning and verification** only read. They never mark emails as read, move them or change their flags.
 - **Open Outlook Reply** only shows Outlook's own Reply window. Nothing is inserted, saved or sent.
 - **Assign / Reassign** moves the ticket's incoming emails into the staff member's folder (no flag or read-state change), then sends **one handoff email to that staff member only**. This is the only email the app sends by itself; replies to schools are always sent by staff.
-- **Mark Done** flags the ticket's incoming emails *Complete* and moves them to the completion folder chosen in Settings.
+- **Mark Done** records the decision; the incoming emails it covered are then flagged *Complete* and moved to the completion folder (standalone: right away; shared database: once the decision is confirmed there, holding the case's shared reservation). Emails that arrived later are never archived under an older decision.
+- **Claim**, **Take over**, **Review**, notes and **Add to existing case** never change Outlook.
+- With the shared database, every Outlook move and handoff is coordinated through a **shared reservation** (schema v2): only one computer can assign or archive a case at a time, the owner changes in the same step, and a handoff is claimed there before it is sent, so it is never sent twice.
 - Nothing is ever deleted, and there is no AI/API integration. You paste the prompt into Copilot yourself.
+
+Development/testing: two instances of the app can run side by side with separate profiles against the same shared database — see [docs/MULTIUSER_TESTING.md](docs/MULTIUSER_TESTING.md) (`scripts\launch_multiuser_test.ps1`, `node scripts\multiuser\run-tests.mjs`). Staff UAT: [docs/UAT_CHECKLIST.md](docs/UAT_CHECKLIST.md).
 
 For staff, the **illustrated step-by-step guide** is [docs/guide/ASR-Support-Desk-User-Guide.html](docs/guide/ASR-Support-Desk-User-Guide.html): one HTML file with a screenshot for every step, using fictional demo data. Rebuild it with `scripts\build-guide.ps1`. See [docs/USER_GUIDE.md](docs/USER_GUIDE.md) for the shorter text reference. See [docs/TEMPLATE_COVERAGE.md](docs/TEMPLATE_COVERAGE.md) for how each template maps to the SOP, and [docs/BUILD_WINDOWS.md](docs/BUILD_WINDOWS.md) for building.
 
@@ -25,16 +34,28 @@ For staff, the **illustrated step-by-step guide** is [docs/guide/ASR-Support-Des
 
 ## Status and verification
 
-Last verified 2026-11-17.
+### Shared team database release (1.1.0, phases P0.1–P0.3) — last verified 2026-11-18
+
+| Area | Status |
+|---|---|
+| Shared Access database (P0.1) | Done. Schema v1, identity/compatibility/maintenance, offline queue bound to the database identity, idempotent operations, field-level merge with conflicts, duplicate-import convergence, pull with overlap + full reconciliation, standalone mode and restartable import. **Verified with the real 64-bit Access ODBC driver** on local test `.accdb` files (create, lock, read-only, maintenance, unicode, long text, lost acknowledgement) |
+| Team workflow (P0.2) | Done. Five statuses, Claim/Take over/Clear owner, Start Work, Review with reason, Mark Done with coverage, stale-Done protection, Review on new replies, Add to Existing Case, Team/My/Unassigned views |
+| Diagnostics (P0.3) | Done. Redacted bounded log, Copy Log/Copy Selected, latest error; failures reproduced with the real driver (unreachable share, missing file, NTFS-denied folder, maintenance, missing driver) |
+| Automated tests | 150 Rust core tests (+9 opt-in ignored tests); 24 recorded dual-instance scenarios against the shared development database; 50 Python worker tests (fake COM); `svelte-check` clean with 0 warnings |
+| Production shared database | Initialized in place at the team default path on 2026-11-18 (it was an empty Access file; verified backup kept next to it); the first computer's 477 cases imported and verified. See docs/SHARED_DATABASE.md §3–4 |
+| **Two-computer pilot** | **Not run — gate open.** Needs two workstations, a test network share, a test database and test Outlook messages. See [docs/PILOT_CHECKLIST.md](docs/PILOT_CHECKLIST.md) |
+| Real network share / two physical computers / live Outlook with the new workflow | **Not verified** |
+
+### Earlier release (1.0.0) — last verified 2026-11-17
 
 | Area | Status |
 |---|---|
 | SOP review, issue catalog, 26 template bodies (39 template entries, 18 issue types) | Done. Catalog cross-checked: all files, placeholders, conditions, field sets and SOP images resolve |
-| Python Outlook worker (16 operations) | Done. 37 tests pass with fake COM objects. They cover: reply window, Mark Done flag and move, assignment moves (no flag/read change, no second move), scope inventory (no date/unread filter, incomplete detection), locate found/not-found/error, notification send (one recipient, header, account, prepare vs. uncertain send stage), Sent Items lookup, notification marker detection |
+| Python Outlook worker (16 operations) | Done. 50 tests pass with fake COM objects. They cover shared-mailbox child-folder recovery through Outlook/MAPI hierarchy tables, nested subtree discovery, parent/all/selected monitoring modes, completion-folder exclusions, scope inventory, ticket synchronization, reply lookup, Mark Done flag/move, assignment moves and notification safety. |
 | Staff assignment / current-history (v3) | Done. Rust tests cover staff validation and deactivation, assignment/reassignment, bulk and partial failures, retries without duplicate moves or notifications, new Outlook IDs after moves, notification content/recipient/failure/uncertain outcomes, notifications never imported, in-scope/out-of-scope visibility, manual moves and return to scope, conflicts, failed/partial/stale scans, folder changes, migration v2→v3, Mark Done after assignment. **Live Outlook moves and sends have not been run in automated tests** |
 | Live classic Outlook (16.0) | Scanning, folders and connection were tested against the real profile before the Copilot workflow. **The new operations (open reply, Mark Done flag/move, validate folder) have not yet been tested against live Outlook** |
 | Svelte frontend | Done. `svelte-check`: 0 errors, 0 warnings. `vite build` succeeds |
-| Rust backend | **Compiles** with the MSVC toolchain (Rust 1.100.0, VS 2022 Build Tools). 87 core tests pass (2 opt-in ignored). They cover: migration v1→v2 and v2→v3 without data loss, prompt generation, completion progress and retries, search and inclusive date filters, staff edits surviving rescans, reopen on new replies. Tauri release build succeeds |
+| Rust backend | **Compiles** with the MSVC toolchain (Rust 1.100.0, VS 2022 Build Tools). 150 core tests pass (9 opt-in ignored), including folder settings normalization, exclusion propagation, scope reconciliation and shared synchronization. |
 | Database migration v2 | Tested on a copy of the real database: 75 tickets, 346 fields, 39 templates, 81 emails and 3 old drafts unchanged. Statuses mapped to In Progress/Done, the old "Needs Review" kept as a badge, and a backup written first |
 | Windows installer | **Produced** by `scripts\build.ps1 -WithWorkerExe` (NSIS, per-user, about 15 MiB). Installs without admin rights, launches, the SQLite DB initialises, and 18 issue types and 39 templates load |
 | CrowdStrike Falcon | No block events for MSVC builds in `%LOCALAPPDATA%\asr-support-desk-target-msvc` (earlier GNU builds were blocked). See [docs/BUILD_WINDOWS.md](docs/BUILD_WINDOWS.md#7-crowdstrike-falcon) |
@@ -77,6 +98,7 @@ Svelte UI (WebView2)  --invoke-->  Rust (Tauri)  --JSON stdin/stdout-->  python 
 ```
 
 - **Rust** handles scheduling, ticket operations, classification, persistence, templates and placeholder rendering.
+- **Shared database** (`shared_store`, `shared_apply`, `shared_workflow`, `sync_queue`, `shared_sync`): the shared Access file is reached through the 64-bit ODBC driver (`odbc-api`) on a background thread with time limits. Every local edit and its queued operation are saved in one SQLite transaction; each operation is applied in one short Access transaction together with its activity, version, change-feed and processed-operation rows. Tests run the same apply logic against SQLite files and, opt-in, real `.accdb` files.
 - **Python** handles Outlook COM only. Each operation starts a new process (`-I` isolated mode, no console window, with a timeout). COM is initialized on that process's main thread and released at exit, so no live COM object ever crosses a process boundary. No Python process runs while idle.
 - **Scheduler:** a single sleeping async task. It runs one sync at a time (overlapping runs are rejected) and reads incrementally from a per-folder watermark minus an overlap window. A full-lookback rescan every 24 h catches emails moved into the folder later. Transient Outlook errors get 3 bounded retries.
 - **Deduplication:** by Internet Message-ID, then by EntryID. Emails moved between folders update their location without creating new tickets. Replies attach to the existing ticket through the ConversationID. A new incoming reply reopens a Done ticket; rescans of known emails never do. Probable duplicates (same sender or school, same issue type, within 14 days) get a badge and are never merged.
@@ -151,7 +173,9 @@ System templates are seeded on first run. When a new app version ships a newer t
 
 ## Known limitations
 
-- **Several computers:** SQLite stays local (never put it on a network drive). Outlook folder placement is the shared source of *current ownership*; local notes, workflow statuses, assignment and notification history are **not** synchronized between computers. A recipient's app imports the ticket from their own staff folder without the assigner's database. Local `T-` numbers are not unique across computers; the `ASR-` reference is.
+- **Several computers:** SQLite stays local (never put it on a network drive). With the shared Access database, cases, owners, statuses, notes and history are shared; Outlook EntryIDs, folder mappings and scan scope stay per computer. Local `T-` numbers are not unique across computers; the `ASR-` reference is. The two-computer pilot has not been run yet (see Status).
+- The Windows account mapping only pre-selects "I am"; it does not secure the Access file. Protect the share folder with NTFS/share permissions.
+- Assignment/notification history recorded by Assign (standalone) is local to that computer.
 - The Team Overview only reconciles staff folders inside the selected folders; others are labelled "not reconciled".
 - Assignment needs write access to the staff folders; notifications need an Outlook account the user may send from (Send As for a shared mailbox is not assumed).
 

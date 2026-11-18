@@ -23,6 +23,9 @@ pub struct AppState {
     pub startup_ms: AtomicU64,
     /// Tickets with a Mark Done run in progress (blocks repeated clicks).
     pub completing: Mutex<std::collections::HashSet<i64>>,
+    /// Shared (Access) database synchronization: status, single-flight guard, wake signal.
+    pub shared: crate::shared_sync::SharedController,
+    pub app_version: String,
     _log_guard: Mutex<Option<tracing_appender::non_blocking::WorkerGuard>>,
 }
 
@@ -36,7 +39,7 @@ fn init_logging(log_dir: &std::path::Path) -> Option<tracing_appender::non_block
         .build(log_dir)
         .ok()?;
     let (nb, guard) = tracing_appender::non_blocking(appender);
-    let filter = tracing_subscriber::EnvFilter::try_from_env("ASR_DESK_LOG").unwrap_or_else(|_| "info".into());
+    let filter = tracing_subscriber::EnvFilter::try_from_env("ASR_DESK_LOG").unwrap_or_else(|_| "info,odbc_api::handles::logging=error".into());
     tracing_subscriber::fmt().with_env_filter(filter).with_writer(nb).with_ansi(false).try_init().ok()?;
     Some(guard)
 }
@@ -95,22 +98,78 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+/// Startup problems before a window exists: stderr plus a text file in %TEMP% (the app never silently
+/// falls back to another profile).
+fn fatal(msg: &str) -> ! {
+    eprintln!("ASR/Audit Support Desk could not start: {msg}");
+    let _ = std::fs::write(std::env::temp_dir().join("asr-support-desk-startup-error.txt"), msg);
+    std::process::exit(2);
+}
+
+/// The main window, created here (not from the config) so a profile can give it its own WebView2 data
+/// folder and, in test mode, a remote-debugging port for the dual-instance UI driver.
+fn create_main_window(app: &tauri::App, profile: &crate::profile::Profile) -> tauri::Result<()> {
+    let Some(cfg) = app.config().app.windows.iter().find(|w| w.label == "main").cloned() else { return Ok(()) };
+    let mut b = tauri::WebviewWindowBuilder::from_config(app.handle(), &cfg)?;
+    if let Some(d) = &profile.data_dir {
+        b = b.data_directory(d.join("webview"));
+    }
+    if profile.test_mode {
+        let title = if profile.name.is_empty() { format!("{} [TEST MODE]", cfg.title) } else { format!("{} [TEST: {}]", cfg.title, profile.name) };
+        b = b.title(title);
+        if let Some(port) = profile.devtools_port {
+            // Tauri's default WebView2 arguments plus the debugging port (localhost only)
+            b = b.additional_browser_args(&format!("--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --remote-debugging-port={port}"));
+        }
+    }
+    b.build()?;
+    Ok(())
+}
+
 pub fn run() {
     let started = std::time::Instant::now();
-    tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main(app)))
-        .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, Some(vec!["--minimized"])))
+    let pre = crate::profile::from_env(None).unwrap_or_else(|e| fatal(&e));
+    let mut builder = tauri::Builder::default();
+    if !pre.multi_instance() {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main(app)));
+    }
+    builder = builder.plugin(tauri_plugin_dialog::init());
+    if !pre.test_mode {
+        builder = builder.plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, Some(vec!["--minimized"])));
+    }
+    builder
         .setup(move |app| {
-            let data_dir = app.path().app_data_dir()?;
+            let data_dir = match &pre.data_dir {
+                Some(d) => d.clone(),
+                None => app.path().app_data_dir()?,
+            };
             std::fs::create_dir_all(&data_dir)?;
+            let profile = crate::profile::install(crate::profile::from_env(Some(&data_dir)).unwrap_or_else(|e| fatal(&e)));
             let guard = init_logging(&data_dir.join("logs"));
-            tracing::info!(version = %app.package_info().version, "starting ASR/Audit Support Desk");
+            tracing::info!(version = %app.package_info().version, data_dir = %data_dir.display(), test_mode = profile.test_mode, outlook = ?profile.outlook, "starting ASR/Audit Support Desk");
+            create_main_window(app, profile)?;
 
             let settings_path = data_dir.join("settings.json");
             let settings = Settings::load(&settings_path);
             let conn = db::open(&data_dir.join("support_desk.db")).map_err(|e| e.to_string())?;
             templates_store::seed_embedded(&conn).map_err(|e| e.to_string())?;
+            // core functions read the mode from SQLite (settings.json is the source)
+            crate::sync_queue::set_mode(&conn, &settings.shared_mode).map_err(|e| e.to_string())?;
+            let version = app.package_info().version.to_string();
+            crate::diag::record(&conn, crate::diag::Severity::Info, "startup", "APP_START",
+                &format!("ASR/Audit Support Desk {version} started; local schema v{}; shared mode {}{}", db::schema_version(&conn).unwrap_or(0), settings.shared_mode,
+                    if profile.test_mode { format!("; TEST MODE profile \"{}\", Outlook {}", profile.name, if matches!(profile.outlook, crate::profile::OutlookMode::Live) { "LIVE" } else { "mock" }) } else { String::new() }), "", "");
+            if let Some(name) = &profile.test_staff {
+                if let Err(e) = crate::staff::ensure_test_identity(&conn, name) {
+                    tracing::warn!(error = %e, "test staff identity could not be prepared");
+                }
+            }
+            // pre-select "who am I" from the Windows account when nothing is chosen yet
+            if crate::staff::current_staff_id(&conn).ok().flatten().is_none() {
+                if let Ok(Some(id)) = crate::staff::match_windows_account(&conn, &crate::sync_queue::windows_account()) {
+                    let _ = crate::staff::set_current_staff_id(&conn, Some(id));
+                }
+            }
             let images_dir = data_dir.join("sop-images");
             if let Err(e) = materialize_images(&images_dir) {
                 tracing::warn!(error = %e, "could not write SOP images");
@@ -134,6 +193,8 @@ pub fn run() {
                 sync: sync::SyncController::default(),
                 startup_ms: AtomicU64::new(0),
                 completing: Mutex::new(Default::default()),
+                shared: Default::default(),
+                app_version: version,
                 _log_guard: Mutex::new(guard),
             });
             if let Err(e) = setup_tray(app) {
@@ -145,6 +206,7 @@ pub fn run() {
                 }
             }
             sync::spawn_scheduler(app.handle().clone());
+            sync::spawn_shared_scheduler(app.handle().clone());
             let ms = started.elapsed().as_millis() as u64;
             app.state::<AppState>().startup_ms.store(ms, std::sync::atomic::Ordering::Relaxed);
             tracing::info!(startup_ms = ms, "backend ready");
@@ -172,6 +234,13 @@ pub fn run() {
             commands::ticket_reopen,
             commands::ticket_complete,
             commands::ticket_start_work,
+            commands::ticket_claim,
+            commands::ticket_release,
+            commands::ticket_flag_review,
+            commands::ticket_resume,
+            commands::ticket_join,
+            commands::ticket_archive_outlook,
+            commands::conflict_retry,
             commands::staff_list,
             commands::staff_save,
             commands::staff_set_active,
@@ -222,6 +291,45 @@ pub fn run() {
             commands::db_backup,
             commands::db_restore,
             commands::app_info,
+            commands::shared_status,
+            commands::shared_test_connection,
+            commands::shared_sync_now,
+            commands::shared_save_config,
+            commands::shared_release_held,
+            commands::shared_discard_held,
+            commands::shared_switch_database,
+            commands::shared_import_preview,
+            commands::shared_import_run,
+            commands::shared_create_database,
+            commands::shared_initialize_existing,
+            commands::notes_add,
+            commands::notes_edit,
+            commands::notes_delete,
+            commands::conflicts_list,
+            commands::conflict_accept_shared,
+            commands::diag_recent,
+            commands::diag_overview,
+            commands::diag_copy_text,
+            commands::diag_report,
+            commands::related_suggestions,
+            commands::ticket_links,
+            commands::ticket_link,
+            commands::ticket_link_set,
+            commands::email_move,
+            commands::merge_preview,
+            commands::merge_run,
+            commands::ticket_timeline,
+            commands::outlook_open_message,
+            commands::tickets_bulk,
+            commands::export_selected,
+            commands::team_overview,
+            commands::staff_activity,
+            commands::diag_export,
+            commands::diag_test_outlook,
+            commands::shared_integrity,
+            commands::shared_backup_now,
+            commands::shared_upgrade,
+            commands::profile_info,
         ])
         .run(tauri::generate_context!())
         .expect("error while running ASR/Audit Support Desk");
