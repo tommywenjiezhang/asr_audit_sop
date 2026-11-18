@@ -39,6 +39,10 @@ Settings › **Shared Database**:
 
 The app **never creates or overwrites** a database at the configured path. A missing file shows *"The database file was not found at this path"* (`DB_FILE_NOT_FOUND`).
 
+The connection check reads the database identity through a **read-only** connection first. Only a confirmed, compatible ASR shared database is ever opened for writing (the device heartbeat and synchronization). Any other Access file at the path is reported as *not a compatible ASR Support Desk shared database* (`DB_INCOMPATIBLE`) and is not changed.
+
+> **Finding (2026-11-18):** a file named `asr_email_support.accdb` **already exists** at the team default path and it is **not** an ASR shared database (it has no `DatabaseMetadata` table). The app refuses it and leaves it untouched. Before the pilot or rollout, decide deliberately: either create the shared database under a **different file name** in that folder (and update the default path), or — if that file is an obsolete placeholder — have its owner archive it first. The app will not replace it.
+
 ## 4. First-time setup (once per team)
 
 1. Ask IT for a share folder with Modify permission for the support team only (the default path above, or another).

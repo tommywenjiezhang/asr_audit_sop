@@ -849,38 +849,16 @@ pub fn probe(path: &Path, device: &DeviceInfo) -> ProbeReport {
     if ext == "accdb" || ext == "mdb" {
         rep.driver = Some(driver_architecture());
     }
-    // 2. open + identity
-    let mut c = match open(path, false) {
-        Ok(c) => c,
-        Err(e) if matches!(e.kind, ErrKind::ReadOnly | ErrKind::PermissionDenied) => {
-            // try a read-only connection to tell "read-only" from "no access at all"
-            match open(path, true) {
-                Ok(mut ro) => match identity(ro.as_mut()) {
-                    Ok(id) => {
-                        rep.readable = true;
-                        rep.compatibility = compatibility(&id).into();
-                        rep.identity = Some(id);
-                        rep.error = Some(SharedError { kind: ErrKind::ReadOnly, ..e });
-                        return fin(rep);
-                    }
-                    Err(e2) => {
-                        rep.error = Some(e2);
-                        return fin(rep);
-                    }
-                },
-                Err(_) => {
-                    rep.error = Some(e);
-                    return fin(rep);
-                }
+    // 2. identity through a READ-ONLY connection: a file that is not (or not yet) an ASR shared database
+    //    - for example another team's Access file at the configured path - is never opened for writing
+    let id = match open(path, true) {
+        Ok(mut ro) => match identity(ro.as_mut()) {
+            Ok(id) => id,
+            Err(e) => {
+                rep.error = Some(e);
+                return fin(rep);
             }
-        }
-        Err(e) => {
-            rep.error = Some(e);
-            return fin(rep);
-        }
-    };
-    let id = match identity(c.as_mut()) {
-        Ok(id) => id,
+        },
         Err(e) => {
             rep.error = Some(e);
             return fin(rep);
@@ -900,8 +878,9 @@ pub fn probe(path: &Path, device: &DeviceInfo) -> ProbeReport {
         ));
         return fin(rep);
     }
-    // 3. write check: device heartbeat in its own short transaction
-    match heartbeat(c.as_mut(), device) {
+    // 3. write check (only for a confirmed, compatible ASR database): device heartbeat in its own short
+    //    transaction through a read-write connection
+    match open(path, false).and_then(|mut c| heartbeat(c.as_mut(), device)) {
         Ok(()) => rep.writable = true,
         Err(e) => {
             let kind = if matches!(e.kind, ErrKind::ReadOnly | ErrKind::PermissionDenied) { ErrKind::ReadOnly } else { e.kind };
@@ -1006,6 +985,31 @@ pub mod tests {
         assert!(r.readable, "{:?}", r.error);
         assert!(!r.writable);
         assert_eq!(r.error.unwrap().kind, ErrKind::ReadOnly);
+    }
+
+    /// A non-ASR Access file at the configured path (e.g. another team's database) is identified as
+    /// incompatible through a read-only connection and is never written to.
+    ///   set ASR_ACCESS_TEST_DIR=C:\some\local\folder && cargo test --no-default-features -- --ignored access_non_asr --nocapture
+    #[test]
+    #[ignore]
+    fn access_non_asr_file_is_refused_without_writing() {
+        let Ok(dir) = std::env::var("ASR_ACCESS_TEST_DIR") else { return };
+        let p = std::path::PathBuf::from(dir).join(format!("other-team-{}.accdb", uuid::Uuid::new_v4()));
+        access::create_file(&p).unwrap();
+        {
+            let mut c = AccessConn::open(&p, false).unwrap();
+            c.exec("CREATE TABLE MasterList (school_id TEXT(20), school_name TEXT(100))", &[]).unwrap();
+            c.exec("INSERT INTO MasterList (school_id, school_name) VALUES ('0012345', 'Maple')", &[]).unwrap();
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1500));
+        let before = (std::fs::metadata(&p).unwrap().modified().unwrap(), std::fs::read(&p).unwrap());
+        let r = probe(&p, &device("A"));
+        println!("non-ASR file -> {:?}", r.error.as_ref().map(|e| e.kind));
+        assert_eq!(r.error.unwrap().kind, ErrKind::Incompatible);
+        assert!(!r.writable);
+        let after = (std::fs::metadata(&p).unwrap().modified().unwrap(), std::fs::read(&p).unwrap());
+        assert_eq!(before.0, after.0, "modified time unchanged");
+        assert!(before.1 == after.1, "file content unchanged");
     }
 
     #[test]

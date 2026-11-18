@@ -38,6 +38,7 @@ For staff, the **illustrated step-by-step guide** is [docs/guide/ASR-Support-Des
 | Team workflow (P0.2) | Done. Five statuses, Claim/Take over/Clear owner, Start Work, Review with reason, Mark Done with coverage, stale-Done protection, Review on new replies, Add to Existing Case, Team/My/Unassigned views |
 | Diagnostics (P0.3) | Done. Redacted bounded log, Copy Log/Copy Selected, latest error; failures reproduced with the real driver (unreachable share, missing file, NTFS-denied folder, maintenance, missing driver) |
 | Automated tests | 120 core tests (+6 opt-in real-driver tests); 33 multi-workstation scenarios also pass against real `.accdb` files (`ASR_SHARED_BACKEND=access`); 37 Python worker tests (fake COM); `svelte-check` clean |
+| Default shared path | The file at the team default path exists but is **not** an ASR shared database; the app refuses it read-only and never changes it. A deliberate decision on the production file name/location is needed (see docs/SHARED_DATABASE.md §3) |
 | **Two-computer pilot** | **Not run — gate open.** Needs two workstations, a test network share, a test database and test Outlook messages. See [docs/PILOT_CHECKLIST.md](docs/PILOT_CHECKLIST.md) |
 | Real network share / two physical computers / live Outlook with the new workflow | **Not verified** |
 
