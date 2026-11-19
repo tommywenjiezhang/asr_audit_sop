@@ -234,6 +234,8 @@ export interface Report {
   created_last_7_days: number; created_last_30_days: number; open_older_than_7_days: number; followups_due: number;
   outlook_drafts_created: number; by_week: [string, number][];
 }
+export interface EmailTicketTaskReportFilter { status: string; received_from: string; received_to: string }
+export interface EmailTicketTaskReport { markdown: string; ticket_count: number; by_status: [string, number][]; by_issue: [string, number][] }
 export interface AppInfo { version: string; data_dir: string; db_path: string; log_dir: string; startup_ms: number; schema_version: number; catalog_version: number; template_count: number; worker?: string }
 export interface OutlookDraftResult { created: boolean; needs_confirmation: boolean; check: DraftCheck; entry_id?: string; mode?: string }
 
@@ -324,6 +326,8 @@ export const api = {
   saveSettings: (settings: Settings) => invoke<Settings>("settings_save", { settings }),
   report: () => invoke<Report>("report_get"),
   exportCsv: (path: string, status: string) => invoke<number>("export_csv", { path, status }),
+  emailTicketTaskReport: (filter: EmailTicketTaskReportFilter) => invoke<EmailTicketTaskReport>("email_ticket_task_report", { filter }),
+  exportEmailTicketTaskReport: (path: string, filter: EmailTicketTaskReportFilter) => invoke<number>("export_email_ticket_task_report", { path, filter }),
   backup: (path: string) => invoke<void>("db_backup", { path }),
   restore: (path: string) => invoke<string>("db_restore", { path }),
   appInfo: () => invoke<AppInfo>("app_info"),

@@ -866,6 +866,16 @@ pub async fn export_csv(state: State<'_, AppState>, path: String, status: Option
 }
 
 #[tauri::command]
+pub async fn email_ticket_task_report(state: State<'_, AppState>, filter: export::EmailTicketTaskReportFilter) -> AppResult<export::EmailTicketTaskReport> {
+    export::email_ticket_task_report(&state.db.lock().unwrap(), &filter)
+}
+
+#[tauri::command]
+pub async fn export_email_ticket_task_report(state: State<'_, AppState>, path: String, filter: export::EmailTicketTaskReportFilter) -> AppResult<usize> {
+    export::export_email_ticket_task_report(&state.db.lock().unwrap(), &PathBuf::from(path), &filter)
+}
+
+#[tauri::command]
 pub async fn db_backup(state: State<'_, AppState>, path: String) -> AppResult<()> {
     let p = PathBuf::from(&path);
     if p == state.data_dir.join("support_desk.db") {

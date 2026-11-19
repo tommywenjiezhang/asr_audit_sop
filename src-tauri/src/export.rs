@@ -3,8 +3,8 @@
 use crate::catalog::catalog;
 use crate::error::{AppError, AppResult};
 use rusqlite::{Connection, OpenFlags};
-use serde::Serialize;
-use std::collections::BTreeSet;
+use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 #[derive(Debug, Serialize)]
@@ -20,6 +20,150 @@ pub struct Report {
     pub followups_due: i64,
     pub outlook_drafts_created: i64,
     pub by_week: Vec<(String, i64)>,
+}
+
+/// Read-only task report generated from the same ticket filter used by the Tickets page.
+#[derive(Debug, Clone, Serialize)]
+pub struct EmailTicketTaskReport {
+    pub markdown: String,
+    pub ticket_count: usize,
+    pub by_status: Vec<(String, i64)>,
+    pub by_issue: Vec<(String, i64)>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct EmailTicketTaskReportFilter {
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub received_from: String,
+    #[serde(default)]
+    pub received_to: String,
+}
+
+const NOT_PROVIDED: &str = "[Not provided]";
+
+fn report_value(value: Option<&str>) -> String {
+    value.map(str::trim).filter(|v| !v.is_empty() && *v != "[]").unwrap_or(NOT_PROVIDED).to_string()
+}
+
+fn report_status(status: &str) -> &str {
+    if status == "Review" { "Needs Review" } else { status }
+}
+
+fn markdown_code_block(body: &str) -> String {
+    let fence = if body.contains("````") { "`````" } else if body.contains("```") { "````" } else { "```" };
+    format!("{fence}\n{}\n{fence}", body.replace("\r\n", "\n").replace('\r', "\n"))
+}
+
+fn field_map(fields: &[crate::tickets::TicketField]) -> BTreeMap<String, String> {
+    fields.iter().map(|f| (f.key.clone(), f.effective.clone())).collect()
+}
+
+fn field_value(fields: &BTreeMap<String, String>, key: &str) -> String {
+    report_value(fields.get(key).map(String::as_str))
+}
+
+fn report_instructions() -> &'static str {
+    "## Microsoft Copilot review instructions\n\nFor each ticket, use only the information in this report and preserve the original email wording when quoting it. Do not infer or invent missing facts; call out every `[Not provided]` value and every outstanding issue. Apply the approved ASR/Audit SOP and approved response templates for the issue type. Do not send email, change tickets, or change Outlook.\n\n1. Analyze each ticket and identify urgency, blockers, missing information, and the next safe NJIIS troubleshooting action.\n2. Generate a prioritized daily task list, with the ticket ID, reason for priority, recommended owner, and concrete next step.\n3. Recommend NJIIS troubleshooting actions that are supported by the approved ASR/Audit SOP; distinguish checks already completed from actions still outstanding.\n4. Draft a follow-up email for each ticket using approved ASR/Audit SOP wording. Keep drafts separate from the original messages, mark any missing placeholders, and ask staff to review/redact sensitive information before copying or sending.\n5. Never transmit this report to an AI service automatically. Staff must review and redact it before copying it into Microsoft Copilot."
+}
+
+/// Build a complete, reviewable Markdown report. This function only reads the database.
+pub fn email_ticket_task_report(conn: &Connection, filter: &EmailTicketTaskReportFilter) -> AppResult<EmailTicketTaskReport> {
+    let status = match filter.status.trim() {
+        "" | "All" | "all" => "".to_string(),
+        "Needs Review" => "Review".to_string(),
+        "In Progress" | "Done" => filter.status.trim().to_string(),
+        other => return Err(AppError::coded("INVALID", format!("Unknown report status: {other}"))),
+    };
+    let q = crate::tickets::ListQuery {
+        status,
+        received_from: filter.received_from.clone(),
+        received_to: filter.received_to.clone(),
+        limit: 1000,
+        ..Default::default()
+    };
+    let mut ids = Vec::new();
+    let mut offset = 0;
+    loop {
+        let page = crate::tickets::list(conn, &crate::tickets::ListQuery { offset, ..q.clone() })?;
+        ids.extend(page.rows.iter().map(|r| r.id));
+        if page.rows.is_empty() || ids.len() as i64 >= page.total { break; }
+        offset += page.rows.len() as i64;
+    }
+
+    let mut status_counts: BTreeMap<String, i64> = BTreeMap::new();
+    let mut issue_counts: BTreeMap<String, i64> = BTreeMap::new();
+    let mut out = String::new();
+    out.push_str("# Email Ticket Task Report\n\n");
+    out.push_str(&format!("Generated: {}\n\n", chrono::Local::now().format("%Y-%m-%d %H:%M %Z")));
+    out.push_str("## Summary\n\n");
+    out.push_str(&format!("- Total tickets: **{}**\n", ids.len()));
+    out.push_str(&format!("- Status filter: **{}**\n", if filter.status.trim().is_empty() { "All" } else { filter.status.trim() }));
+    out.push_str(&format!("- Received date range: **{}** to **{}**\n\n", report_value(Some(&filter.received_from)), report_value(Some(&filter.received_to))));
+    out.push_str("### Counts by status\n\n");
+    let mut rendered_tickets = Vec::new();
+    for id in ids {
+        let d = crate::tickets::detail(conn, id)?;
+        let t = &d.ticket;
+        *status_counts.entry(report_status(&t.status).to_string()).or_default() += 1;
+        let mut issues = d.issues.iter().map(|i| i.issue_type.clone()).collect::<Vec<_>>();
+        if issues.is_empty() { issues.push(t.issue_type.clone()); }
+        for issue in &issues {
+            let name = catalog().issue(issue).map(|x| x.name.clone()).unwrap_or_else(|| issue.clone());
+            *issue_counts.entry(name).or_default() += 1;
+        }
+        rendered_tickets.push((d, issues));
+    }
+    for (s, n) in &status_counts { out.push_str(&format!("- {s}: {n}\n")); }
+    if status_counts.is_empty() { out.push_str("- None\n"); }
+    out.push_str("\n### Counts by issue type\n\n");
+    for (s, n) in &issue_counts { out.push_str(&format!("- {s}: {n}\n")); }
+    if issue_counts.is_empty() { out.push_str("- None\n"); }
+    out.push_str("\n");
+    out.push_str(report_instructions());
+    out.push_str("\n\n---\n\n");
+
+    for (number, (d, issues)) in rendered_tickets.iter().enumerate() {
+        let t = &d.ticket;
+        let fields = field_map(&d.fields);
+        let issue_names = issues.iter().map(|i| catalog().issue(i).map(|x| x.name.clone()).unwrap_or_else(|| i.clone())).collect::<Vec<_>>().join(", ");
+        out.push_str(&format!("## {}. {}\n\n", number + 1, t.display_id));
+        out.push_str("### Ticket details\n\n");
+        out.push_str(&format!("- Ticket ID: {}\n- Status: {}\n- Issue type: {}\n- Subject: {}\n- Received date: {}\n- Assigned staff: {}\n\n", t.display_id, report_status(&t.status), issue_names, report_value(t.original_subject.as_deref()), report_value(t.first_received_at.as_deref().or(t.last_email_received_at.as_deref()).or(Some(&t.created_at))), report_value(t.assignee_name.as_deref().or(t.assigned_staff.as_deref()))));
+        out.push_str("### Sender\n\n");
+        out.push_str(&format!("- Name: {}\n- Email: {}\n- Phone: {}\n- Title: {}\n\n", report_value(t.sender_name.as_deref()), report_value(t.sender_email.as_deref()), field_value(&fields, "sender_phone"), field_value(&fields, "sender_title")));
+        out.push_str("### NJIIS and school information\n\n");
+        out.push_str(&format!("- NJIIS username: {}\n- Facility ID: {}\n", field_value(&fields, "njiis_username"), field_value(&fields, "facility_id")));
+        for slot in &d.schools {
+            let prefix = if *slot == 1 { "school".to_string() } else { format!("school{slot}") };
+            out.push_str(&format!("- School name ({}): {}\n- School NJIIS ID ({}): {}\n", slot, field_value(&fields, &format!("{prefix}_name")), slot, field_value(&fields, &format!("{prefix}_njiis_id"))));
+        }
+        out.push_str("\n### Previously completed actions and outstanding issues\n\n");
+        out.push_str(&format!("- Staff actions: {}\n- Resolution notes: {}\n- Internal notes: {}\n- Review reason: {}\n- Next follow-up date: {}\n\n", report_value(t.staff_actions.as_deref()), report_value(t.resolution_notes.as_deref()), report_value(t.internal_notes.as_deref()), report_value(t.review_reason.as_deref()), report_value(t.next_followup_date.as_deref())));
+        if !d.notes.is_empty() { out.push_str("**Staff notes:**\n\n"); for n in &d.notes { out.push_str(&format!("- {} ({}): {}\n", n.author_name, n.created_at, n.body)); } out.push('\n'); }
+        if !d.history.is_empty() { out.push_str("**Ticket history:**\n\n"); for h in &d.history { out.push_str(&format!("- {} — {} — {}{}\n", h.at, h.actor, h.action, h.new_value.as_deref().map(|v| format!(": {v}")).unwrap_or_default())); } out.push('\n'); }
+        out.push_str("### Complete related conversation history\n\n");
+        let mut messages = d.messages.clone();
+        messages.sort_by(|a, b| a.received_at.cmp(&b.received_at).then(a.id.cmp(&b.id)));
+        if messages.is_empty() { out.push_str("[No related messages stored]\n\n"); }
+        for (i, m) in messages.iter().enumerate() {
+            out.push_str(&format!("#### Message {} — {}\n\n- Link type: {}\n- Sender: {} <{}>\n- Received: {}\n- Attachments: {}\n\n", i + 1, report_value(m.subject.as_deref()), m.link_type, report_value(m.sender_name.as_deref()), report_value(m.sender_email.as_deref()), report_value(m.received_at.as_deref()), if m.has_attachments { "Yes" } else { "No" }));
+            match m.body_text.as_deref().filter(|b| !b.is_empty()) {
+                Some(body) => out.push_str(&format!("{}\n\n", markdown_code_block(body))),
+                None => out.push_str("[Message body not provided]\n\n"),
+            }
+            if m.body_truncated { out.push_str("[Warning: this stored message is truncated; load the full email before relying on it.]\n\n"); }
+        }
+        out.push_str("---\n\n");
+    }
+    Ok(EmailTicketTaskReport { markdown: out, ticket_count: rendered_tickets.len(), by_status: status_counts.into_iter().collect(), by_issue: issue_counts.into_iter().collect() })
+}
+
+pub fn export_email_ticket_task_report(conn: &Connection, path: &Path, filter: &EmailTicketTaskReportFilter) -> AppResult<usize> {
+    let report = email_ticket_task_report(conn, filter)?;
+    std::fs::write(path, &report.markdown)?;
+    Ok(report.ticket_count)
 }
 
 fn pairs(conn: &Connection, sql: &str) -> AppResult<Vec<(String, i64)>> {
@@ -204,5 +348,26 @@ mod tests {
         assert!(dir.path().join("safety.db").exists());
         std::fs::write(dir.path().join("junk.db"), b"not a db").unwrap();
         assert!(validate_backup(&dir.path().join("junk.db")).is_err());
+    }
+
+    #[test]
+    fn email_ticket_task_report_filters_and_preserves_conversation() {
+        let c = conn();
+        let s = Settings::default();
+        crate::tickets::ingest(&c, &[msg(1, "C1", "Subtype", "Original wording: School subtype is missing.\nPlease help.", "jane@school.org")], &s).unwrap();
+        crate::tickets::set_field(&c, 1, "sender_phone", Some("609-555-0100".into()), true, "staff").unwrap();
+        crate::tickets::set_field(&c, 1, "sender_title", Some("School Nurse".into()), true, "staff").unwrap();
+        let filter = EmailTicketTaskReportFilter { status: "All".into(), received_from: "2026-11-16T00:00:00Z".into(), received_to: "2026-11-17T00:00:00Z".into() };
+        let r = email_ticket_task_report(&c, &filter).unwrap();
+        assert_eq!(r.ticket_count, 1);
+        assert!(r.markdown.contains("Original wording: School subtype is missing."));
+        assert!(r.markdown.contains("609-555-0100"));
+        assert!(r.markdown.contains("School Nurse"));
+        assert!(r.markdown.contains("Microsoft Copilot review instructions"));
+        assert!(r.markdown.contains("[Not provided]"));
+
+        let none = email_ticket_task_report(&c, &EmailTicketTaskReportFilter { status: "Done".into(), ..filter }).unwrap();
+        assert_eq!(none.ticket_count, 0);
+        assert!(none.markdown.contains("Total tickets: **0**"));
     }
 }
