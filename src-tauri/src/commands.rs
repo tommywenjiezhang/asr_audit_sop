@@ -340,50 +340,32 @@ fn shared_bound(state: &AppState) -> bool {
     crate::sync_queue::mode(&conn) == crate::sync_queue::MODE_SHARED && crate::sync_queue::bound_db(&conn).is_some()
 }
 
-/// Mark Done: the staff decision is saved at once (works offline; no sent-reply verification). With a
-/// shared database, Outlook archiving is a separate step after the shared database accepted the decision;
-/// on a standalone computer it runs right away. An Outlook failure never undoes the Done decision.
+/// Mark Done is deliberately ordered as an Outlook side effect followed by the workflow decision.
+/// Outlook and SQLite cannot share a transaction, so `message_completion` makes a move retryable;
+/// a failed/partial move leaves the ticket in its previous status and never publishes a false Done.
 #[tauri::command]
-pub async fn ticket_complete(app: AppHandle, state: State<'_, AppState>, id: i64) -> AppResult<MarkDoneResult> {
+pub async fn ticket_complete(state: State<'_, AppState>, id: i64) -> AppResult<MarkDoneResult> {
+    complete_ticket(&state, id).await
+}
+
+/// Shared implementation used by the detail view and bulk Mark Done. Each caller gets the same
+/// Outlook-first ordering and per-ticket busy guard.
+pub async fn complete_ticket(state: &AppState, id: i64) -> AppResult<MarkDoneResult> {
     let _guard = busy(&state.completing, id)?;
     let a = actor(&state);
-    let r = crate::workflow::mark_done(&state.db.lock().unwrap(), id, &a);
-    let decision = op_failed(&state, "Mark Done", id, r)?;
-    sync::nudge_shared(&state);
-    if shared_bound(&state) {
-        if settings(&state).archive_folder.is_none() {
-            return Ok(MarkDoneResult { decision, outlook: None, outlook_message: "Done saved. Outlook was not changed: no completion folder is configured (Settings › Completion Folder).".into() });
-        }
-        // the Outlook step waits for the shared database to accept the decision (never for a stale one);
-        // it is remembered so it also runs later if the shared database is unreachable right now
-        pending_archive_set(&state, id, true);
-        let _ = tokio::time::timeout(Duration::from_secs(60), sync::shared_run(&app, "mark-done", true)).await;
-        if !done_confirmed(&state, id) {
-            return Ok(MarkDoneResult {
-                decision,
-                outlook: None,
-                outlook_message: "Done saved. The shared database has not confirmed it yet; the covered emails are flagged and moved to the Completed folder automatically once it does (or use Archive in Outlook).".into(),
-            });
-        }
-        return Ok(match archive_shared(&state, id).await {
-            Ok(o) if o.done => {
-                pending_archive_set(&state, id, false);
-                let msg = if o.dest_path.is_empty() { "No Outlook emails to archive.".to_string() } else { format!("Outlook updated: {} email(s) flagged complete and moved to {}.", o.moved, o.dest_path) };
-                MarkDoneResult { decision, outlook: Some(o), outlook_message: msg }
-            }
-            Ok(o) => MarkDoneResult { decision, outlook: Some(o), outlook_message: "The case is Done, but some Outlook steps failed. Use Retry Outlook update.".into() },
-            Err(e) => MarkDoneResult { decision, outlook: None, outlook_message: format!("The case is Done, but Outlook was not updated: {e} Use Archive in Outlook to retry.") },
-        });
-    }
     if settings(&state).archive_folder.is_none() {
-        return Ok(MarkDoneResult { decision, outlook: None, outlook_message: "Outlook was not changed: no completion folder is configured (Settings › Completion Folder).".into() });
+        return Err(AppError::coded("NOT_CONFIGURED", "Choose a completion folder in Settings › Completion Folder before marking tickets Done."));
     }
-    let (outlook, outlook_message) = match run_archive(&state, id).await {
-        Ok(o) if o.done => (Some(o.clone()), if o.dest_path.is_empty() { "No Outlook emails to archive.".into() } else { format!("Outlook updated: {} email(s) flagged complete and moved to {}.", o.moved, o.dest_path) }),
-        Ok(o) => (Some(o), "The case is Done, but some Outlook steps failed. Use Retry Outlook update.".into()),
-        Err(e) => (None, format!("The case is Done, but Outlook could not be updated: {e} Use Retry Outlook update.")),
-    };
-    Ok(MarkDoneResult { decision, outlook, outlook_message })
+    let outlook = if shared_bound(&state) { archive_shared(&state, id).await? } else { run_archive(&state, id).await? };
+    if !outlook.done {
+        let detail = outlook.failed.iter().map(|f| format!("{}: {}", f.subject, f.error)).collect::<Vec<_>>().join("; ");
+        return Err(AppError::coded("OUTLOOK_PARTIAL", format!("Mark Done was not saved because Outlook could not complete every email. {detail}")));
+    }
+    let decision = op_failed(&state, "Mark Done", id, crate::workflow::mark_done(&state.db.lock().unwrap(), id, &a))?;
+    pending_archive_set(&state, id, false);
+    sync::nudge_shared(&state);
+    let outlook_message = if outlook.dest_path.is_empty() { "No Outlook emails to archive.".into() } else { format!("Outlook updated: {} email(s) flagged complete and moved to {}.", outlook.moved, outlook.dest_path) };
+    Ok(MarkDoneResult { decision, outlook: Some(outlook), outlook_message })
 }
 
 /// Archive in Outlook (after Mark Done): flag complete + move only the emails covered by the latest Done
@@ -477,7 +459,10 @@ async fn archive_shared(state: &AppState, id: i64) -> AppResult<completion::Outc
     }
     let tsid = ticket_shared_id(state, id)?;
     let emails = email_shared_ids(&state.db.lock().unwrap(), &items.iter().map(|i| i.message_id).collect::<Vec<_>>());
-    let r = apply_online(&o, "outlook.reserve", &tsid, serde_json::json!({}), serde_json::json!({"kind": "archive", "email_ids": emails})).await?;
+    // Reserve before the shared Done decision is published; a failed move must not leave a
+    // colleague seeing a falsely completed case. Legacy retries of an already-Done case use the
+    // normal "archive" reservation through ticket_archive_outlook.
+    let r = apply_online(&o, "outlook.reserve", &tsid, serde_json::json!({}), serde_json::json!({"kind": "archive_prepare", "email_ids": emails})).await?;
     if r.result != "accepted" {
         let code = if r.extra.get("busy").and_then(|v| v.as_bool()).unwrap_or(false) { "BUSY_ELSEWHERE" } else { "NOT_CONFIRMED" };
         return Err(AppError::coded(code, r.message));
@@ -1846,7 +1831,18 @@ pub struct BulkOutcome {
 #[tauri::command]
 pub async fn tickets_bulk(app: AppHandle, state: State<'_, AppState>, action: String, ids: Vec<i64>, reason: Option<String>) -> AppResult<BulkOutcome> {
     let a = actor(&state);
-    let results: Vec<crate::bulk::BulkResult> = if action == "archive" {
+    let results: Vec<crate::bulk::BulkResult> = if action == "done" {
+        let mut v = vec![];
+        for id in ids.iter().copied().collect::<std::collections::BTreeSet<i64>>() {
+            let disp = tickets::display_id(id);
+            let r = complete_ticket(&state, id).await;
+            v.push(match r {
+                Ok(o) => crate::bulk::BulkResult { ticket_id: id, display_id: disp, ok: true, outcome: "done".into(), message: o.outlook_message },
+                Err(e) => crate::bulk::BulkResult { ticket_id: id, display_id: disp, ok: false, outcome: "failed".into(), message: e.to_string() },
+            });
+        }
+        v
+    } else if action == "archive" {
         let mut v = vec![];
         for id in ids.iter().copied().collect::<std::collections::BTreeSet<i64>>() {
             let disp = tickets::display_id(id);

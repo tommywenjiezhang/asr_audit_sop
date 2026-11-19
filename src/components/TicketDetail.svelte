@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { api, condMatches, copyText, errMsg, fmtDate, outlookPendingLabel, reasonLabel, statusBadge, statusText, SYNC_LABEL, type AssignmentOp, type FieldDef, type LocalConflict, type TicketDetail } from "../lib/api";
+  import { api, condMatches, copyText, errMsg, fmtDate, outlookPendingLabel, reasonLabel, statusBadge, statusText, SYNC_LABEL, type AssignmentOp, type FieldDef, type LocalConflict, type Settings, type TicketDetail } from "../lib/api";
   import { app, issueName, toast } from "../lib/stores.svelte";
   import FieldInput from "./FieldInput.svelte";
   import MergeDialog from "./MergeDialog.svelte";
@@ -11,6 +11,7 @@
   type Msg = { kind: "ok" | "err" | "info"; text: string } | null;
 
   let d = $state<TicketDetail | null>(null);
+  let settings = $state<Settings | null>(null);
   let err = $state("");
   let prompt = $state("");
   let promptErr = $state("");
@@ -69,6 +70,7 @@
     d = null; prompt = ""; copyMsg = null; outlookMsg = null; doneMsg = null; failures = []; notFound = false; openMsg = null; assignMsg = null;
     load();
   });
+  api.settings().then((s) => (settings = s)).catch(() => {});
 
   const values = $derived(Object.fromEntries((d?.fields ?? []).map((f) => [f.key, f.effective])) as Record<string, string>);
   const field = (key: string) => d?.fields.find((x) => x.key === key);
@@ -96,6 +98,7 @@
   const chronological = $derived([...(d?.messages ?? [])].sort((a, b) => (a.received_at ?? "").localeCompare(b.received_at ?? "") || a.id - b.id));
   const completionOf = (mid: number) => d?.completion.find((c) => c.message_id === mid);
   const isDone = $derived(d?.ticket.status === "Done");
+  const archiveConfigured = $derived(!!settings?.archive_folder);
 
   async function saveField(key: string, value: string | null, verified: boolean) {
     try {
@@ -412,7 +415,7 @@
           {#if outlookPending}<button disabled={!!busy} onclick={() => run("archive", archiveOutlook)} title="Flag complete and move the emails covered by the Done decision">{busy === "archive" ? "Updating Outlook…" : "Archive in Outlook"}</button>{/if}
           <button disabled={!!busy} onclick={() => run("reopen", reopen)}>Reopen</button>
         {:else}
-          <button class="done" disabled={!!busy} onclick={() => run("done", markDone)}>{busy === "done" ? "Saving…" : "3. Mark Done"}</button>
+          <button class="done" disabled={!!busy || !archiveConfigured} title={archiveConfigured ? "Flag and move all incoming emails, then mark Done" : "Choose a Completion Folder in Settings first"} onclick={() => run("done", markDone)}>{busy === "done" ? "Saving…" : "3. Mark Done"}</button>
         {/if}
         <button class="link small" onclick={() => (showJoin = !showJoin)}>Add to existing case…</button>
         <button class="link small" onclick={() => (mergeSources = [])} title="Combine other tickets into this case (preview first)">Combine cases…</button>
@@ -437,7 +440,7 @@
       {#if failures.length}
         <ul class="small fails">{#each failures as f}<li><b>{f.subject || `Email ${f.message_id}`}</b>: {f.error}</li>{/each}</ul>
       {/if}
-      {#if !isDone}<div class="small muted">Copying the prompt or opening a reply never marks the case Done. Mark Done records your decision at once (no sent-reply check){sharedBound ? "; once the shared database confirms it, the covered incoming emails are flagged complete and moved to the Completed folder (automatically, also if you are offline now)" : " and then flags the case's incoming emails complete and moves them to the completion folder"}. A new reply later moves the case to Review.</div>{/if}
+      {#if !isDone}<div class="small muted">Copying the prompt or opening a reply never marks the case Done. Mark Done first flags and moves every covered incoming email in Outlook; the case becomes Done only after all moves succeed. A new reply later moves the case to Review.{#if !archiveConfigured} Choose a Completion Folder in Settings to enable Mark Done.{/if}</div>{/if}
       {#if isDone && outlookPending}<div class="small muted">Outlook not updated yet for this Done case{sharedBound ? " (it runs automatically after the Done decision is confirmed; Archive in Outlook retries it now)" : ""}.</div>{/if}
       {#if sharedBound && !isDone}<div class="small muted">Claim / Take over change the owner only. Assign / Reassign also move the emails to the staff folder and send one handoff — the shared database makes sure only one computer does that.</div>{/if}
     </div>

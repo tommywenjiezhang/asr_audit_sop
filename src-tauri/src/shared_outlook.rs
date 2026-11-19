@@ -3,7 +3,7 @@
 //! Outlook moves and handoff emails cannot be undone, and every computer sees the same team mailbox, so
 //! before a computer moves emails for a case it must hold the case's *reservation* in the shared database:
 //!
-//!   outlook.reserve       {outlook_op_id, kind: "assign" | "archive", to_staff_id?, email_ids, note}
+//!   outlook.reserve       {outlook_op_id, kind: "assign" | "archive" | "archive_prepare", to_staff_id?, email_ids, note}
 //!                         original {owner_staff_id} = the owner the user saw (stale protection for assign).
 //!                         One transaction: refuse if another computer holds an unexpired reservation for
 //!                         the same case and kind; for "assign" also change the owner (reason assign /
@@ -126,7 +126,7 @@ fn reserve(tx: &mut WorkflowTx<'_, '_>, tid: &str, res: &mut OpResult) -> SResul
     let op = tx.op().clone();
     let p = &op.proposed;
     let kind = s(p, "kind").unwrap_or_default();
-    if kind != "assign" && kind != "archive" {
+    if kind != "assign" && kind != "archive" && kind != "archive_prepare" {
         reject(res, "Unknown Outlook operation kind.", json!({}));
         return Ok(());
     }
@@ -197,6 +197,10 @@ fn reserve(tx: &mut WorkflowTx<'_, '_>, tid: &str, res: &mut OpResult) -> SResul
                     wf::set_status(tx, tid, &after, ASSIGNED, None, None)?;
                 }
             }
+        }
+        "archive_prepare" => {
+            // Mark Done uses this reservation before publishing the shared Done status. This
+            // preserves the invariant that a failed Outlook move cannot create a false Done.
         }
         _ => {
             if cur.status != DONE {
